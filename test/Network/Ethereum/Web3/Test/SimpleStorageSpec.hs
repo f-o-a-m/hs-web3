@@ -23,7 +23,8 @@ import           Network.Ethereum.Web3.Encoding   (ABIEncoding (..))
 import qualified Network.Ethereum.Web3.Eth        as Eth
 import           Network.Ethereum.Web3.Test.Utils
 import           Network.Ethereum.Web3.TH
-import           Network.Ethereum.Web3.Types      (Call (..), Change (..), Filter (..))
+import           Network.Ethereum.Web3.Types      (BlockNumber (..), Call (..), Change (..), Filter (..),
+                                                   parseBlockNumber)
 import           Numeric                          (showHex)
 import           System.Environment               (getEnv)
 import           System.IO.Unsafe                 (unsafePerformIO)
@@ -42,11 +43,9 @@ instance ABIEncoding ev => ABIEncoding (BoundedEvent ev from to) where
 
 instance (Event ev, KnownSymbol from, KnownSymbol to) => Event (BoundedEvent ev from to) where
     eventFilter (BoundedEvent ev) a =
-        let maybifyBlank "" = Nothing
-            maybifyBlank x  = Just (T.pack x)
-            baseFilter = eventFilter ev a
-         in baseFilter { filterFromBlock = maybifyBlank $ symbolVal (Proxy :: Proxy from)
-                       , filterToBlock = maybifyBlank $ symbolVal (Proxy :: Proxy to)
+        let baseFilter = eventFilter ev a
+         in baseFilter { filterFromBlock = parseBlockNumber . T.pack $ symbolVal (Proxy :: Proxy from)
+                       , filterToBlock = parseBlockNumber . T.pack $ symbolVal (Proxy :: Proxy to)
                        }
 
 instance Show ev => Show (BoundedEvent ev from to) where
@@ -79,9 +78,9 @@ events = describe "can interact with a SimpleStorage contract across block inter
         var <- newMVar []
         let theCall = callFromTo primaryAccount contractAddress
             theSets = [1, 2, 3]
-        start' <- runWeb3Configured Eth.blockNumber
+        start <- runWeb3Configured Eth.blockNumber
         blockNumberV <- newEmptyMVar
-        SomeSymbol (Proxy :: Proxy start) <- return . someSymbolVal $ T.unpack start'
+        SomeSymbol (Proxy :: Proxy start) <- return (symbolizeBlockNumber start)
         void . runWeb3Configured $ event contractAddress $ \ev -> do
             let (CountSet cs) = ev
             liftIO . putStrLn $ "1: Got a CountSet! " ++ show cs
@@ -93,7 +92,7 @@ events = describe "can interact with a SimpleStorage contract across block inter
                 else return ContinueEvent
         void . for theSets $ \v -> runWeb3Configured (setCount theCall v)
         end' <- takeMVar blockNumberV
-        SomeSymbol (Proxy :: Proxy end) <- return . someSymbolVal $ T.unpack end'
+        SomeSymbol (Proxy :: Proxy end) <- return (symbolizeBlockNumber end')
         termination <- newEmptyMVar
         void . runWeb3Configured $ event contractAddress $ \(ev :: BoundedEvent CountSet start end) -> do
             let BoundedEvent (CountSet cs) = ev
@@ -116,8 +115,8 @@ events = describe "can interact with a SimpleStorage contract across block inter
         let theCall = callFromTo primaryAccount contractAddress
             firstSets = [1, 2, 3]
             secondSets = [4, 5, 6]
-        start' <- runWeb3Configured Eth.blockNumber
-        SomeSymbol (Proxy :: Proxy start) <- return . someSymbolVal $ T.unpack start'
+        start <- runWeb3Configured Eth.blockNumber
+        SomeSymbol (Proxy :: Proxy start) <- return (symbolizeBlockNumber start)
         termination <- newEmptyMVar
         void . runWeb3Configured $ event contractAddress $ \(CountSet cs) -> do
             liftIO . putStrLn $ "1: Got a CountSet! " ++ show cs
@@ -155,11 +154,10 @@ events = describe "can interact with a SimpleStorage contract across block inter
         termination <- newEmptyMVar
         let theCall = callFromTo primaryAccount contractAddress
             theSets = [8, 9, 10]
-        now' <- runWeb3Configured Eth.blockNumber
-        let now = read (T.unpack now')
-            later = now + 3
+        (BlockNumber now) <- runWeb3Configured Eth.blockNumber
+        let later = now + 3
             later' = "0x" ++ showHex later ""
-        liftIO . putStrLn $ "now is " ++ show now ++ " (" ++ show now' ++ ")"
+        liftIO . putStrLn $ "now is " ++ show now
         SomeSymbol (Proxy :: Proxy later) <- return (someSymbolVal later')
         void . runWeb3Configured $ event contractAddress $ \(ev :: BoundedEvent CountSet later "latest") -> do
             let BoundedEvent (CountSet cs) = ev
@@ -182,13 +180,12 @@ events = describe "can interact with a SimpleStorage contract across block inter
         termination <- newEmptyMVar
         let theCall = callFromTo primaryAccount contractAddress
             theSets = [10, 11, 12]
-        now' <- runWeb3Configured Eth.blockNumber
-        let now = read (T.unpack now')
-            later = now + 3
+        (BlockNumber now) <- runWeb3Configured Eth.blockNumber
+        let later = now + 3
             latest = now + 8
             later' = "0x" ++ showHex later ""
             latest' = "0x" ++ showHex latest ""
-        liftIO . putStrLn $ "now is " ++ show now ++ " (" ++ show now' ++ ")"
+        liftIO . putStrLn $ "now is " ++ show now
         SomeSymbol (Proxy :: Proxy later) <- return (someSymbolVal later')
         SomeSymbol (Proxy :: Proxy latest) <- return (someSymbolVal latest')
         void . runWeb3Configured $ event contractAddress $ \(ev :: BoundedEvent CountSet later latest) -> do

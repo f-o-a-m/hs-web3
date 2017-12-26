@@ -19,10 +19,12 @@ import           Control.Exception                       (Exception)
 import           Control.Monad.IO.Class                  (MonadIO)
 import           Data.Aeson
 import           Data.Aeson.TH
+import           Data.Aeson.Types                        (Parser, parseMaybe)
 import           Data.Default
 import           Data.Monoid                             ((<>))
 import           Data.Ord                                (Down (..))
 import           Data.Text                               (Text)
+import qualified Data.Text.Lazy                          as LazyText
 import qualified Data.Text.Lazy.Builder                  as B
 import qualified Data.Text.Lazy.Builder.Int              as B
 import qualified Data.Text.Read                          as R
@@ -93,17 +95,25 @@ instance UnitSpec Quantity where
 
 newtype BlockNumber = BlockNumber Integer deriving (Eq, Show, Generic, Ord)
 
+renderBlockNumber :: BlockNumber -> LazyText.Text
+renderBlockNumber (BlockNumber x) =
+    let hexValue = B.toLazyText (B.hexadecimal x)
+    in  "0x" <> hexValue
+
+blockNumberParser :: Text -> Parser BlockNumber
+blockNumberParser v = case R.hexadecimal v of
+    Right (x, "") -> return (BlockNumber x)
+    _             -> fail "Unable to parse BlockNumber!"
+
+parseBlockNumber :: Text -> Maybe BlockNumber
+parseBlockNumber = parseMaybe blockNumberParser
+
 instance FromJSON BlockNumber where
-    parseJSON (String v) =
-        case R.hexadecimal v of
-            Right (x, "") -> return (BlockNumber x)
-            _             -> fail "Unable to parse BlockNumber!"
-    parseJSON _ = fail "The string is required!"
+    parseJSON (String v) = blockNumberParser v
+    parseJSON _          = fail "The string is required!"
 
 instance ToJSON BlockNumber where
-    toJSON (BlockNumber x) =
-        let hexValue = B.toLazyText (B.hexadecimal x)
-        in  toJSON ("0x" <> hexValue)
+    toJSON = toJSON . renderBlockNumber
 
 -- | Low-level event filter data structure
 data Filter = Filter

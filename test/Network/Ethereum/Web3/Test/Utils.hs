@@ -8,6 +8,7 @@ module Network.Ethereum.Web3.Test.Utils
   , microtime
   , takeMVarWithTimeout
   , awaitBlock
+  , symbolizeBlockNumber
   ) where
 
 import           Control.Concurrent          (MVar, threadDelay, tryTakeMVar)
@@ -18,12 +19,13 @@ import           Data.List.Split             (splitOn)
 import           Data.Maybe                  (fromMaybe)
 import           Data.Ratio                  (numerator)
 import           Data.String                 (IsString, fromString)
-import qualified Data.Text                   as T
+import qualified Data.Text.Lazy              as LT
 import           Data.Time.Clock.POSIX       (getPOSIXTime)
 import           Data.Traversable            (for)
+import           GHC.TypeLits
 import           Network.Ethereum.Web3       (Address, DefaultProvider, Provider (..), Web3, Web3Error, runWeb3')
 import           Network.Ethereum.Web3.Eth   (accounts, blockNumber)
-import           Network.Ethereum.Web3.Types (Call (..))
+import           Network.Ethereum.Web3.Types (BlockNumber (..), Call (..), renderBlockNumber)
 import           System.Environment          (lookupEnv, setEnv)
 import           Test.Hspec.Expectations     (shouldSatisfy)
 
@@ -48,10 +50,8 @@ loadExportedEnvironmentVariables = do
 
     where warnMalformation m = do
             putStrLn $ m ++ ". are you sure you're using the right inject-contract-addresses.sh?"
-            pure []
-          detectedEnv k v = do
-              -- putStrLn $ "detected " ++ k ++ "=" ++ v
-              pure [(k, v)]
+            return []
+          detectedEnv k v = return [(k, v)]
 
 injectExportedEnvironmentVariables :: IO ()
 injectExportedEnvironmentVariables = do
@@ -98,9 +98,11 @@ takeMVarWithTimeout timeout mv = do
 
 awaitBlock :: Integer -> IO ()
 awaitBlock bn = do
-    bn' <- runWeb3Configured blockNumber
-    let bn'' = read (T.unpack bn')
-    putStrLn $ "awaiting block " ++ show bn ++ ", currently " ++ show bn''
-    if bn'' >= bn
+    BlockNumber bn' <- runWeb3Configured blockNumber
+    putStrLn $ "awaiting block " ++ show bn ++ ", currently " ++ show bn'
+    if bn' >= bn
         then return ()
         else threadDelay 1000000 >> awaitBlock bn
+
+symbolizeBlockNumber :: BlockNumber -> SomeSymbol
+symbolizeBlockNumber = someSymbolVal . LT.unpack . renderBlockNumber
