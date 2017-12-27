@@ -19,6 +19,16 @@ This is the Ethereum compatible Haskell API which implements the [Generic JSON R
 > or [parity](https://github.com/ethcore/parity) Ethereum node,
 > please start node first before using the library.
 
+### Testing
+Embedded in the repository is a Truffle project with some contracts that are used as test cases.
+You will need `truffle` and `jq`, as well as an Ethereum node to utilize the test suite. For the
+most part, it's as simple as `stack test`. If you use an Ethereum node other than http://localhost:8545,
+you must update truffle.js as well as pass the `WEB3_PROVIDER=http://node:port/` environment variable
+to `stack test`.
+
+Note, if the Ethereum node you're testing on uses an ephemeral blockchain, and restarts between runs of the test suite,
+you may need to run `stack clean` prior to `stack test` to redeploy the contracts onto the new chain.
+
 ### Web3 monad
 
 Any Ethereum node communication wrapped with `Web3` monadic type.
