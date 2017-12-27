@@ -24,7 +24,7 @@ import qualified Network.Ethereum.Web3.Eth        as Eth
 import           Network.Ethereum.Web3.Test.Utils
 import           Network.Ethereum.Web3.TH
 import           Network.Ethereum.Web3.Types      (BlockNumber (..), Call (..), Change (..), Filter (..),
-                                                   parseBlockNumber)
+                                                   parseDefaultBlock)
 import           Numeric                          (showHex)
 import           System.Environment               (getEnv)
 import           System.IO.Unsafe                 (unsafePerformIO)
@@ -44,8 +44,8 @@ instance ABIEncoding ev => ABIEncoding (BoundedEvent ev from to) where
 instance (Event ev, KnownSymbol from, KnownSymbol to) => Event (BoundedEvent ev from to) where
     eventFilter (BoundedEvent ev) a =
         let baseFilter = eventFilter ev a
-         in baseFilter { filterFromBlock = parseBlockNumber . T.pack $ symbolVal (Proxy :: Proxy from)
-                       , filterToBlock = parseBlockNumber . T.pack $ symbolVal (Proxy :: Proxy to)
+         in baseFilter { filterFromBlock = parseDefaultBlock . T.pack $ symbolVal (Proxy :: Proxy from)
+                       , filterToBlock = parseDefaultBlock . T.pack $ symbolVal (Proxy :: Proxy to)
                        }
 
 instance Show ev => Show (BoundedEvent ev from to) where
@@ -73,7 +73,7 @@ interactions = describe "can interact with a SimpleStorage contract" $ do
         v `shouldBe` theValue
 
 events :: SpecWith Address
-events = describe "can interact with a SimpleStorage contract across block intervals" $ do
+events = describe "can interact with a SimpleStorage contract across block intervals using the classic API" $ do
     it "can stream events starting and ending in the past" $ \primaryAccount -> do
         var <- newMVar []
         let theCall = callFromTo primaryAccount contractAddress
@@ -175,6 +175,7 @@ events = describe "can interact with a SimpleStorage contract across block inter
             Just term -> return ()
         vals <- takeMVar var
         sort vals `shouldBe` sort theSets
+
     it "can stream events starting and ending in the future, bounded" $ \primaryAccount -> do
         var <- newMVar []
         termination <- newEmptyMVar
@@ -201,6 +202,43 @@ events = describe "can interact with a SimpleStorage contract across block inter
         void . for theSets $ \v -> runWeb3Configured (setCount theCall v)
         takeMVarWithTimeout 20000000 termination >>= \case
             Nothing -> error "timed out waiting for filter!"
+            Just term -> return ()
+        vals <- takeMVar var
+        sort vals `shouldBe` sort theSets
+
+streaming :: SpecWith Address
+streaming = describe "can interact with a SimpleStorage contract across block intervals using the streaming API" $ do
+    it "can stream events starting and ending in the past" $ \primaryAccount -> do
+        var <- newMVar []
+        let theCall = callFromTo primaryAccount contractAddress
+            theSets = [1, 2, 3]
+        start <- runWeb3Configured Eth.blockNumber
+        blockNumberV <- newEmptyMVar
+        SomeSymbol (Proxy :: Proxy start) <- return (symbolizeBlockNumber start)
+        void . runWeb3Configured $ event contractAddress $ \ev -> do
+            let (CountSet cs) = ev
+            liftIO . putStrLn $ "1: Got a CountSet! " ++ show cs
+            if cs == 3
+                then do
+                    bn <- changeBlockNumber <$> ask
+                    liftIO $ putMVar blockNumberV bn
+                    return TerminateEvent
+                else return ContinueEvent
+        void . for theSets $ \v -> runWeb3Configured (setCount theCall v)
+        end' <- takeMVar blockNumberV
+        SomeSymbol (Proxy :: Proxy end) <- return (symbolizeBlockNumber end')
+        termination <- newEmptyMVar
+        void . runWeb3Configured $ event contractAddress $ \(ev :: BoundedEvent CountSet start end) -> do
+            let BoundedEvent (CountSet cs) = ev
+            liftIO . putStrLn $ "2: Got a CountSet! " ++ show cs
+            liftIO $ modifyMVar_ var (return . (cs:))
+            if cs == 3
+                then do
+                    liftIO $ putMVar termination True
+                    return TerminateEvent
+                else return ContinueEvent
+        takeMVarWithTimeout 20000000 termination >>= \case
+            Nothing -> error "timed out waiting for second filter!"
             Just term -> return ()
         vals <- takeMVar var
         sort vals `shouldBe` sort theSets

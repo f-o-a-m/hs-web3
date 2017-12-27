@@ -1,4 +1,5 @@
 {-# LANGUAGE GADTs               #-}
+{-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE RankNTypes          #-}
 {-# LANGUAGE RecordWildCards     #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -18,11 +19,10 @@ import           Control.Monad                  (forM, void)
 import           Control.Monad.Trans.Class      (lift)
 import           Control.Monad.Trans.Maybe      (MaybeT (..))
 import           Control.Monad.Trans.Reader     (ReaderT (..), runReaderT)
-import           Data.Machine                   (Is (Refl), ProcessT,
-                                                 Step (Await, Stop, Yield),
-                                                 autoT, runMachineT)
+import           Data.Machine                   (Is (Refl), ProcessT, Step (Await, Stop, Yield), autoT, runMachineT)
 import           Data.Machine.MealyT            (MealyT (..), arrM)
-import           Data.Maybe                     (mapMaybe)
+import           Data.Maybe                     (fromMaybe, mapMaybe)
+import           Data.Text.Lazy                 (toStrict)
 
 data FilterChange a = FilterChange { filterChangeRawChange :: Change
                                    , filterChangeEvent     :: a
@@ -80,7 +80,7 @@ pollFilter :: forall p a s . (Provider p, ABIEncoding a)
            -> DefaultBlock
            -> HaltingMealyT (Web3 p) s [FilterChange a]
 pollFilter fid stop = MealyT $ \s -> do
-  bn <- lift $ Eth.blockNumber
+  bn <- lift Eth.blockNumber
   if BlockWithNumber bn > stop
   then do
     lift $ Eth.uninstallFilter fid
@@ -97,22 +97,31 @@ mkFilterChanges cs = flip mapMaybe cs $ \c@Change{..} -> do
 
 filterStream :: forall p . Provider p
              => HaltingMealyT (Web3 p) FilterStreamState Filter
-filterStream = MealyT $ \FilterStreamState{..} -> do
-  end <- lift . mkBlockNumber $ filterToBlock fssInitialFilter
-  if fssCurrentBlock > end
-  then MaybeT $ return Nothing -- halt
-  else return $ let to' = newTo end fssCurrentBlock fssWindowSize
-                    filter' = fssInitialFilter { filterFromBlock = Just fssCurrentBlock
-                                               , filterToBlock = Just to'
-                                               }
-                    MealyT next = filterStream
-                in (filter', MealyT $ \s -> next s { fssCurrentBlock = succ to' })
+filterStream = MealyT $ \FilterStreamState{..} ->
+    case filterToBlock fssInitialFilter of
+        Nothing -> MaybeT (return Nothing)
+        Just end ->
+            if BlockWithNumber fssCurrentBlock > end
+            then MaybeT $ return Nothing -- halt
+            else do
+                  to' <- newTo end (BlockWithNumber fssCurrentBlock) fssWindowSize
+                  succTo' <- succ to'
+                  let filter' = fssInitialFilter { filterFromBlock = Just (BlockWithNumber fssCurrentBlock)
+                                                 , filterToBlock = Just to'
+                                                 }
+                      MealyT next = filterStream
+                  return (filter', MealyT $ \s -> next s { fssCurrentBlock = succTo' })
 
-      where succ :: BlockNumber -> BlockNumber
-            succ (BlockNumber bn) = BlockNumber $ bn + 1
+    where succ :: DefaultBlock -> MaybeT (Web3 p) BlockNumber
+          succ (BlockWithNumber (BlockNumber bn)) = return . BlockNumber $ bn + 1
+          succ x = do
+              bn' <- lift $ resolveDefaultBlock (Just x)
+              succ (BlockWithNumber bn')
 
-            newTo :: BlockNumber -> BlockNumber -> Integer -> BlockNumber
-            newTo upper (BlockNumber current) window = min upper . BlockNumber $ current + window
+          newTo :: DefaultBlock -> DefaultBlock -> Integer -> MaybeT (Web3 p) DefaultBlock
+          newTo upper current window = do
+              current' <- lift $ resolveDefaultBlock (Just current)
+              return $ min upper (BlockWithNumber (current' + BlockNumber window))
 
 
 event' :: (ABIEncoding a, Provider p)
@@ -121,7 +130,7 @@ event' :: (ABIEncoding a, Provider p)
        -> (a -> ReaderT Change (Web3 p) EventAction)
        -> Web3 p ()
 event' fltr window handler = do
-  start <- mkBlockNumber $ filterFromBlock fltr
+  start <- resolveDefaultBlock (filterFromBlock fltr)
   let initState = FilterStreamState { fssCurrentBlock = start
                                     , fssInitialFilter = fltr
                                     , fssWindowSize = window
@@ -132,18 +141,20 @@ event' fltr window handler = do
     Just lastProcessedFilterState -> do
       let BlockNumber lastBlock = fssCurrentBlock lastProcessedFilterState
           pollingFromBlock = BlockNumber $ lastBlock + 1
-          pollTo = case filterToBlock fltr of
-                     Nothing -> Latest
-                     Just bn -> BlockWithNumber bn
-      filterId <- Eth.newFilter fltr { filterFromBlock = Just pollingFromBlock }
+          pollTo = fromMaybe Latest (filterToBlock fltr)
+      filterId <- Eth.newFilter fltr { filterFromBlock = Just (BlockWithNumber pollingFromBlock) }
       void $ reduceEventStream (pollFilter filterId pollTo) handler ()
 
 event :: forall p a . (Provider p, ABIEncoding a)
       => Filter
       -> (a -> ReaderT Change (Web3 p) EventAction)
       -> Web3 p ()
-event fltr handler = event' fltr 0 handler
+event fltr = event' fltr 0
 
-mkBlockNumber :: (Provider p) => (Maybe BlockNumber) -> Web3 p BlockNumber
-mkBlockNumber (Just toBlock) = return toBlock
-mkBlockNumber Nothing        = Eth.blockNumber
+resolveDefaultBlock :: (Provider p) => Maybe DefaultBlock -> Web3 p BlockNumber
+resolveDefaultBlock = \case
+    Nothing -> Eth.blockNumber
+    Just (BlockWithNumber n) -> return n
+    Just x -> do
+        block <- Eth.getBlockByNumber . toStrict $ renderDefaultBlock x
+        return (blockBlockNumber block)

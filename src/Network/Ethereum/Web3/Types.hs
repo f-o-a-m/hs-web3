@@ -15,15 +15,17 @@
 --
 module Network.Ethereum.Web3.Types where
 
+import           Control.Applicative                     ((<|>))
 import           Control.Exception                       (Exception)
 import           Control.Monad.IO.Class                  (MonadIO)
 import           Data.Aeson
 import           Data.Aeson.TH
-import           Data.Aeson.Types                        (Parser, parseMaybe)
+import           Data.Aeson.Types                        (Parser, parseMaybe, typeMismatch)
 import           Data.Default
 import           Data.Monoid                             ((<>))
 import           Data.Ord                                (Down (..))
 import           Data.Text                               (Text)
+import qualified Data.Text                               as T
 import qualified Data.Text.Lazy                          as LazyText
 import qualified Data.Text.Lazy.Builder                  as B
 import qualified Data.Text.Lazy.Builder.Int              as B
@@ -93,7 +95,7 @@ instance UnitSpec Quantity where
     divider = const 1
     name = const "quantity"
 
-newtype BlockNumber = BlockNumber Integer deriving (Eq, Show, Generic, Ord)
+newtype BlockNumber = BlockNumber Integer deriving (Eq, Show, Generic, Ord, Num)
 
 renderBlockNumber :: BlockNumber -> LazyText.Text
 renderBlockNumber (BlockNumber x) =
@@ -105,22 +107,56 @@ blockNumberParser v = case R.hexadecimal v of
     Right (x, "") -> return (BlockNumber x)
     _             -> fail "Unable to parse BlockNumber!"
 
-parseBlockNumber :: Text -> Maybe BlockNumber
-parseBlockNumber = parseMaybe blockNumberParser
-
 instance FromJSON BlockNumber where
     parseJSON (String v) = blockNumberParser v
-    parseJSON _          = fail "The string is required!"
+    parseJSON x          = typeMismatch "String" x
 
 instance ToJSON BlockNumber where
     toJSON = toJSON . renderBlockNumber
+
+-- | The contract call mode describe used state: latest or pending
+data DefaultBlock = BlockWithNumber BlockNumber | Earliest | Latest | Pending
+  deriving (Show, Eq)
+
+instance Ord DefaultBlock where
+    compare Pending Pending                            = EQ
+    compare Latest Latest                              = EQ
+    compare Earliest Earliest                          = EQ
+    compare (BlockWithNumber a) (BlockWithNumber b)    = compare a b
+    compare _ Pending                                  = LT
+    compare Pending Latest                             = GT
+    compare _ Latest                                   = LT
+    compare Earliest (BlockWithNumber (BlockNumber 0)) = EQ
+    compare Earliest _                                 = LT
+    compare a b                                        = compare (Down b) (Down a)
+
+renderDefaultBlock :: DefaultBlock -> LazyText.Text
+renderDefaultBlock (BlockWithNumber bn) = renderBlockNumber bn
+renderDefaultBlock x                    = LazyText.pack . toLowerFirst $ show x
+
+defaultBlockParser :: Text -> Parser DefaultBlock
+defaultBlockParser x = (BlockWithNumber <$> blockNumberParser x) <|> other x
+    where other "earliest" = pure Earliest
+          other "latest"   = pure Latest
+          other "pending"  = pure Pending
+          other x          = fail "Expected a hex number or one of earliest, latest, or pending"
+
+parseDefaultBlock :: Text -> Maybe DefaultBlock
+parseDefaultBlock = parseMaybe defaultBlockParser
+
+instance ToJSON DefaultBlock where
+    toJSON = toJSON . renderDefaultBlock
+
+instance FromJSON DefaultBlock where
+    parseJSON (String x) = defaultBlockParser x
+    parseJSON x          = typeMismatch "String" x
 
 -- | Low-level event filter data structure
 data Filter = Filter
   { filterAddress   :: !(Maybe Address)
   , filterTopics    :: !(Maybe [Maybe Text])
-  , filterFromBlock :: !(Maybe BlockNumber)
-  , filterToBlock   :: !(Maybe BlockNumber)
+  , filterFromBlock :: !(Maybe DefaultBlock)
+  , filterToBlock   :: !(Maybe DefaultBlock)
   } deriving (Show, Generic)
 
 $(deriveJSON (defaultOptions
@@ -174,26 +210,6 @@ $(deriveJSON (defaultOptions
 
 instance Default Call where
     def = Call Nothing zero (Just 3000000) Nothing (Just 0) Nothing
-
-
--- | The contract call mode describe used state: latest or pending
-data DefaultBlock = BlockWithNumber BlockNumber | Earliest | Latest | Pending
-  deriving (Show, Eq)
-
-instance Ord DefaultBlock where
-    compare Pending Pending                         = EQ
-    compare Latest Latest                           = EQ
-    compare Earliest Earliest                       = EQ
-    compare (BlockWithNumber a) (BlockWithNumber b) = compare a b
-    compare _ Pending                               = LT
-    compare Pending Latest                          = GT
-    compare _ Latest                                = LT
-    compare Earliest _                              = LT
-    compare a b                                     = compare (Down b) (Down a)
-
-instance ToJSON DefaultBlock where
-    toJSON (BlockWithNumber bn) = toJSON bn
-    toJSON parameter            = toJSON . toLowerFirst . show $ parameter
 
 -- TODO: Wrap
 -- | Transaction hash text string
