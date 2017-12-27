@@ -3,31 +3,32 @@
 {-# LANGUAGE TemplateHaskell #-}
 module Network.Ethereum.Web3.Test.SimpleStorageSpec where
 
-import           Control.Concurrent               (threadDelay)
+import           Control.Concurrent                       (threadDelay)
 import           Control.Concurrent.MVar
-import           Control.Monad                    (void)
-import           Control.Monad.IO.Class           (liftIO)
-import           Control.Monad.Trans.Reader       (ask)
-import           Data.ByteString                  (ByteString)
+import           Control.Monad                            (void)
+import           Control.Monad.IO.Class                   (liftIO)
+import           Control.Monad.Trans.Reader               (ask)
+import           Data.ByteString                          (ByteString)
 import           Data.Default
-import           Data.Either                      (isRight)
-import           Data.List                        (sort)
+import           Data.Either                              (isRight)
+import           Data.List                                (sort)
 import           Data.Proxy
-import           Data.String                      (fromString)
-import qualified Data.Text                        as T
-import           Data.Traversable                 (for)
+import           Data.String                              (fromString)
+import qualified Data.Text                                as T
+import           Data.Traversable                         (for)
 import           GHC.TypeLits
-import           Network.Ethereum.Web3            hiding (convert)
-import           Network.Ethereum.Web3.Contract   (Event (..))
-import           Network.Ethereum.Web3.Encoding   (ABIEncoding (..))
-import qualified Network.Ethereum.Web3.Eth        as Eth
+import           Network.Ethereum.Web3                    hiding (convert)
+import           Network.Ethereum.Web3.Contract           (Event (..))
+import           Network.Ethereum.Web3.Contract.Streaming (event')
+import           Network.Ethereum.Web3.Encoding           (ABIEncoding (..))
+import qualified Network.Ethereum.Web3.Eth                as Eth
 import           Network.Ethereum.Web3.Test.Utils
 import           Network.Ethereum.Web3.TH
-import           Network.Ethereum.Web3.Types      (BlockNumber (..), Call (..), Change (..), Filter (..),
-                                                   parseDefaultBlock)
-import           Numeric                          (showHex)
-import           System.Environment               (getEnv)
-import           System.IO.Unsafe                 (unsafePerformIO)
+import           Network.Ethereum.Web3.Types              (BlockNumber (..), Call (..), Change (..), DefaultBlock (..),
+                                                           Filter (..), parseDefaultBlock)
+import           Numeric                                  (showHex)
+import           System.Environment                       (getEnv)
+import           System.IO.Unsafe                         (unsafePerformIO)
 import           Test.Hspec
 
 [abiFrom|build/contracts/abis/SimpleStorage.json|]
@@ -55,7 +56,8 @@ spec :: Spec
 spec = describe "Simple Storage" $ do
     it "should inject contract addresses" injectExportedEnvironmentVariables
     withPrimaryEthereumAccount `before` interactions
-    withPrimaryEthereumAccount `before` events
+    --withPrimaryEthereumAccount `before` events
+    withPrimaryEthereumAccount `before` streaming
 
 interactions :: SpecWith Address
 interactions = describe "can interact with a SimpleStorage contract" $ do
@@ -68,7 +70,7 @@ interactions = describe "can interact with a SimpleStorage contract" $ do
 
     it "can read the value back" $ \primaryAccount -> do
         let theCall = callFromTo primaryAccount contractAddress
-        sleepSeconds 5
+        sleepSeconds 7 -- should open up resolveDefaultBlock and wait till Pending is committed
         v <- runWeb3Configured (count theCall)
         v `shouldBe` theValue
 
@@ -208,13 +210,14 @@ events = describe "can interact with a SimpleStorage contract across block inter
 
 streaming :: SpecWith Address
 streaming = describe "can interact with a SimpleStorage contract across block intervals using the streaming API" $ do
+    let countSetFilter from to address = (eventFilter (undefined :: CountSet) address) { filterFromBlock = from, filterToBlock = to }
+        windowSize = 1
     it "can stream events starting and ending in the past" $ \primaryAccount -> do
         var <- newMVar []
         let theCall = callFromTo primaryAccount contractAddress
             theSets = [1, 2, 3]
-        start <- runWeb3Configured Eth.blockNumber
+        start <- BlockWithNumber <$> runWeb3Configured Eth.blockNumber
         blockNumberV <- newEmptyMVar
-        SomeSymbol (Proxy :: Proxy start) <- return (symbolizeBlockNumber start)
         void . runWeb3Configured $ event contractAddress $ \ev -> do
             let (CountSet cs) = ev
             liftIO . putStrLn $ "1: Got a CountSet! " ++ show cs
@@ -225,11 +228,9 @@ streaming = describe "can interact with a SimpleStorage contract across block in
                     return TerminateEvent
                 else return ContinueEvent
         void . for theSets $ \v -> runWeb3Configured (setCount theCall v)
-        end' <- takeMVar blockNumberV
-        SomeSymbol (Proxy :: Proxy end) <- return (symbolizeBlockNumber end')
+        end <- BlockWithNumber <$> takeMVar blockNumberV
         termination <- newEmptyMVar
-        void . runWeb3Configured $ event contractAddress $ \(ev :: BoundedEvent CountSet start end) -> do
-            let BoundedEvent (CountSet cs) = ev
+        runWeb3Configured $ event' (countSetFilter (Just start) (Just end) contractAddress) windowSize $ \(CountSet cs) -> do
             liftIO . putStrLn $ "2: Got a CountSet! " ++ show cs
             liftIO $ modifyMVar_ var (return . (cs:))
             if cs == 3
@@ -242,3 +243,41 @@ streaming = describe "can interact with a SimpleStorage contract across block in
             Just term -> return ()
         vals <- takeMVar var
         sort vals `shouldBe` sort theSets
+
+    it "can stream events starting in the past and ending in the future" $ \primaryAccount -> do
+        var <- newMVar []
+        term1 <- newEmptyMVar
+        let theCall = callFromTo primaryAccount contractAddress
+            firstSets = [1, 2, 3]
+            secondSets = [4, 5, 6]
+        start <- BlockWithNumber <$> runWeb3Configured Eth.blockNumber
+        termination <- newEmptyMVar
+        runWeb3Configured $ event' (countSetFilter Nothing Nothing contractAddress) windowSize $ \(CountSet cs) -> do
+            liftIO . putStrLn $ "1: Got a CountSet! " ++ show cs
+            if cs == 3
+                then do
+                    liftIO $ putMVar term1 True
+                    return TerminateEvent
+                else return ContinueEvent
+        void . for firstSets $ \v -> runWeb3Configured (setCount theCall v)
+        takeMVarWithTimeout 20000000 term1 >>= \case
+            Nothing -> error "timed out waiting for first filter!"
+            Just term -> return ()
+
+        term2 <- newEmptyMVar
+        -- nb: termination is reused since it was taken just prior!
+        void . runWeb3Configured $ event' (countSetFilter (Just start) Nothing contractAddress) windowSize $ \(CountSet cs) -> do
+            liftIO . putStrLn $ "2: Got a CountSet! " ++ show cs
+            liftIO $ modifyMVar_ var (return . (cs:))
+            if cs == 6
+                then do
+                    liftIO $ putMVar term2 True
+                    return TerminateEvent
+                else return ContinueEvent
+        void . for secondSets $ \v -> runWeb3Configured (setCount theCall v)
+        takeMVarWithTimeout 20000000 term2 >>= \case
+            Nothing -> error "timed out waiting for second filter!"
+            Just term -> return ()
+
+        vals <- takeMVar var
+        sort vals `shouldBe` sort (firstSets ++ secondSets)
