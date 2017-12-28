@@ -1,4 +1,5 @@
-import           Control.Monad                      (void)
+import           Control.Monad                      (void, when)
+import           Data.List                          (isPrefixOf)
 import           Data.List.Split                    (splitOn)
 import           Data.Traversable                   (for)
 import           Distribution.PackageDescription    (HookedBuildInfo, PackageDescription)
@@ -12,7 +13,6 @@ import           System.Environment                 (getEnvironment, setEnv)
 main :: IO ()
 main = defaultMainWithHooks simpleUserHooks
          { buildHook = myBuildHook
-         , testHook  = myTestHook
          }
 
 rawCommand :: Verbosity -> String -> [String] -> Maybe [(String, String)] -> IO ()
@@ -27,7 +27,7 @@ exportStore :: String
 exportStore = ".detected-contract-addresses"
 
 myBuildHook :: PackageDescription -> LocalBuildInfo -> UserHooks -> BuildFlags -> IO ()
-myBuildHook pd lbi uh flags = do
+myBuildHook pd lbi uh flags = when hasTestTarget $ do
     putStrLn "Running truffle deploy and convertAbi before building tests"
     rawCommand v "truffle" ["deploy"] Nothing
     rawCommand v "./convertAbi.sh" [] Nothing
@@ -36,8 +36,4 @@ myBuildHook pd lbi uh flags = do
     buildHook simpleUserHooks pd lbi uh flags
 
     where v = fromFlag $ buildVerbosity flags
-
-myTestHook :: Args -> PackageDescription -> LocalBuildInfo -> UserHooks -> TestFlags -> IO ()
-myTestHook args pd lbi uh tf = do
-    putStrLn "my test hook!" -- this apparently doesnt run?
-    -- testHook simpleUserHooks args pd lbi uh tf
+          hasTestTarget = any ("test:" `isPrefixOf`) $ buildArgs flags
