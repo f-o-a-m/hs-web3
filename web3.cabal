@@ -23,8 +23,7 @@ source-repository head
 custom-setup
   setup-depends:
     base,
-    Cabal,
-    split
+    Cabal
 
 library
   hs-source-dirs:      src
@@ -40,6 +39,7 @@ library
                      , Network.Ethereum.Web3.Provider
                      , Network.Ethereum.Web3.Encoding
                      , Network.Ethereum.Web3.Contract
+                     , Network.Ethereum.Web3.Contract.Streaming
                      , Network.Ethereum.Web3.Encoding.Bytes
                      , Network.Ethereum.Web3.Encoding.Tuple
   other-modules:       Network.Ethereum.Web3.JsonRpc
@@ -56,6 +56,7 @@ library
                      , bytestring
                      , cryptonite
                      , data-default
+                     , machines
                      , vector
                      , memory
                      , aeson

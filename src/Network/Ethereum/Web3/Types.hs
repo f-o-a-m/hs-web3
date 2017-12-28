@@ -15,22 +15,27 @@
 --
 module Network.Ethereum.Web3.Types where
 
-import           Control.Exception              (Exception)
-import           Control.Monad.IO.Class         (MonadIO)
+import           Control.Applicative                     ((<|>))
+import           Control.Exception                       (Exception)
+import           Control.Monad.IO.Class                  (MonadIO)
 import           Data.Aeson
 import           Data.Aeson.TH
+import           Data.Aeson.Types                        (Parser, parseMaybe, typeMismatch)
 import           Data.Default
-import           Data.Monoid                    ((<>))
-import           Data.Text                      (Text)
-import qualified Data.Text.Lazy.Builder         as B
-import qualified Data.Text.Lazy.Builder.Int     as B
-import qualified Data.Text.Read                 as R
-import           Data.Typeable                  (Typeable)
+import           Data.Monoid                             ((<>))
+import           Data.Ord                                (Down (..))
+import           Data.Text                               (Text)
+import qualified Data.Text                               as T
+import qualified Data.Text.Lazy                          as LazyText
+import qualified Data.Text.Lazy.Builder                  as B
+import qualified Data.Text.Lazy.Builder.Int              as B
+import qualified Data.Text.Read                          as R
+import           Data.Typeable                           (Typeable)
 import           GHC.Generics
-import           Network.Ethereum.Web3.Address  (Address, zero)
-import           Network.Ethereum.Web3.Internal (toLowerFirst)
-import           Network.Ethereum.Web3.Encoding.Internal (toQuantityHexText)
 import           Network.Ethereum.Unit
+import           Network.Ethereum.Web3.Address           (Address, zero)
+import           Network.Ethereum.Web3.Encoding.Internal (toQuantityHexText)
+import           Network.Ethereum.Web3.Internal          (toLowerFirst)
 
 -- | Any communication with Ethereum node wrapped with 'Web3' monad
 newtype Web3 a b = Web3 { unWeb3 :: IO b }
@@ -90,12 +95,68 @@ instance UnitSpec Quantity where
     divider = const 1
     name = const "quantity"
 
+newtype BlockNumber = BlockNumber Integer deriving (Eq, Show, Generic, Ord, Num)
+
+renderBlockNumber :: BlockNumber -> LazyText.Text
+renderBlockNumber (BlockNumber x) =
+    let hexValue = B.toLazyText (B.hexadecimal x)
+    in  "0x" <> hexValue
+
+blockNumberParser :: Text -> Parser BlockNumber
+blockNumberParser v = case R.hexadecimal v of
+    Right (x, "") -> return (BlockNumber x)
+    _             -> fail "Unable to parse BlockNumber!"
+
+instance FromJSON BlockNumber where
+    parseJSON (String v) = blockNumberParser v
+    parseJSON x          = typeMismatch "String" x
+
+instance ToJSON BlockNumber where
+    toJSON = toJSON . renderBlockNumber
+
+-- | The contract call mode describe used state: latest or pending
+data DefaultBlock = BlockWithNumber BlockNumber | Earliest | Latest | Pending
+  deriving (Show, Eq)
+
+instance Ord DefaultBlock where
+    compare Pending Pending                            = EQ
+    compare Latest Latest                              = EQ
+    compare Earliest Earliest                          = EQ
+    compare (BlockWithNumber a) (BlockWithNumber b)    = compare a b
+    compare _ Pending                                  = LT
+    compare Pending Latest                             = GT
+    compare _ Latest                                   = LT
+    compare Earliest (BlockWithNumber (BlockNumber 0)) = EQ
+    compare Earliest _                                 = LT
+    compare a b                                        = compare (Down b) (Down a)
+
+renderDefaultBlock :: DefaultBlock -> LazyText.Text
+renderDefaultBlock (BlockWithNumber bn) = renderBlockNumber bn
+renderDefaultBlock x                    = LazyText.pack . toLowerFirst $ show x
+
+defaultBlockParser :: Text -> Parser DefaultBlock
+defaultBlockParser x = (BlockWithNumber <$> blockNumberParser x) <|> other x
+    where other "earliest" = pure Earliest
+          other "latest"   = pure Latest
+          other "pending"  = pure Pending
+          other x          = fail "Expected a hex number or one of earliest, latest, or pending"
+
+parseDefaultBlock :: Text -> Maybe DefaultBlock
+parseDefaultBlock = parseMaybe defaultBlockParser
+
+instance ToJSON DefaultBlock where
+    toJSON = toJSON . renderDefaultBlock
+
+instance FromJSON DefaultBlock where
+    parseJSON (String x) = defaultBlockParser x
+    parseJSON x          = typeMismatch "String" x
+
 -- | Low-level event filter data structure
 data Filter = Filter
   { filterAddress   :: !(Maybe Address)
   , filterTopics    :: !(Maybe [Maybe Text])
-  , filterFromBlock :: !(Maybe Text)
-  , filterToBlock   :: !(Maybe Text)
+  , filterFromBlock :: !(Maybe DefaultBlock)
+  , filterToBlock   :: !(Maybe DefaultBlock)
   } deriving (Show, Generic)
 
 $(deriveJSON (defaultOptions
@@ -124,7 +185,7 @@ data Change = Change
   , changeTransactionIndex :: !Text
   , changeTransactionHash  :: !Text
   , changeBlockHash        :: !Text
-  , changeBlockNumber      :: !Text
+  , changeBlockNumber      :: !BlockNumber
   , changeAddress          :: !Address
   , changeData             :: !Text
   , changeTopics           :: ![Text]
@@ -150,15 +211,6 @@ $(deriveJSON (defaultOptions
 instance Default Call where
     def = Call Nothing zero (Just 3000000) Nothing (Just 0) Nothing
 
-
--- | The contract call mode describe used state: latest or pending
-data DefaultBlock = BlockNumberHex Text | Earliest | Latest | Pending
-  deriving (Show, Eq)
-
-instance ToJSON DefaultBlock where
-    toJSON (BlockNumberHex hex) = toJSON hex
-    toJSON parameter            = toJSON . toLowerFirst . show $ parameter
-
 -- TODO: Wrap
 -- | Transaction hash text string
 type TxHash = Text
@@ -171,7 +223,7 @@ data Transaction = Transaction
   -- ^ QUANTITY - the number of transactions made by the sender prior to this one.
   , txBlockHash        :: !Text
   -- ^ DATA, 32 Bytes - hash of the block where this transaction was in. null when its pending.
-  , txBlockNumber      :: !Text
+  , txBlockNumber      :: !BlockNumber
   -- ^ QUANTITY - block number where this transaction was in. null when its pending.
   , txTransactionIndex :: !Text
   -- ^ QUANTITY - integer of the transactions index position in the block. null when its pending.
@@ -194,7 +246,7 @@ $(deriveJSON (defaultOptions
 
 -- | Block information
 data Block = Block
-  { blockNumber           :: !Text
+  { blockBlockNumber      :: !BlockNumber
   -- ^ QUANTITY - the block number. null when its pending block.
   , blockHash             :: !Text
   -- ^ DATA, 32 Bytes - hash of the block. null when its pending block.
