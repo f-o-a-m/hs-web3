@@ -23,8 +23,7 @@ source-repository head
 custom-setup
   setup-depends:
     base,
-    Cabal,
-    split
+    Cabal
 
 library
   hs-source-dirs:      src

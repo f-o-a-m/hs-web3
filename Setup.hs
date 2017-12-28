@@ -1,6 +1,5 @@
 import           Control.Monad                      (void, when)
 import           Data.List                          (isPrefixOf)
-import           Data.List.Split                    (splitOn)
 import           Data.Traversable                   (for)
 import           Distribution.PackageDescription    (HookedBuildInfo, PackageDescription)
 import           Distribution.Simple
