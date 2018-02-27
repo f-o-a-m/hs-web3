@@ -26,13 +26,14 @@ import           Control.Exception              (throwIO)
 import           Control.Monad                  ((>=>))
 import           Data.Aeson
 import           Data.ByteString.Lazy           (ByteString)
+import           Data.Proxy
 import           Data.Text                      (Text)
 import           Data.Vector                    (fromList)
 import           Network.HTTP.Client            (RequestBody (RequestBodyLBS),
-                                                 httpLbs, method, newManager,
+                                                 httpLbs, method,
                                                  parseRequest, requestBody,
                                                  requestHeaders, responseBody)
-import           Network.HTTP.Client.TLS        (tlsManagerSettings)
+
 
 -- | Name of called method.
 type MethodName = Text
@@ -43,17 +44,16 @@ type ServerUri  = String
 -- | Remote call of JSON-RPC method.
 -- Arguments of function are stored into @params@ request array.
 remote :: Remote a => MethodName -> a
-remote n = remote_ (\uri -> call uri . Array . fromList)
+remote n = remote_ (\node -> call node . Array . fromList)
   where
-    call uri = connection uri . encode . Request n 1
-    connection uri body = do
-        manager <- newManager tlsManagerSettings
-        request <- parseRequest uri
+    call node = connection node . encode . Request n 1
+    connection node body = do
+        request <- parseRequest (rpcUri node)
         let request' = request
                      { requestBody = RequestBodyLBS body
                      , requestHeaders = [("Content-Type", "application/json")]
                      , method = "POST" }
-        responseBody <$> httpLbs request' manager
+        responseBody <$> httpLbs request' (rpcManager node)
 
 decodeResponse :: FromJSON a => ByteString -> IO a
 decodeResponse = tryParse . eitherDecode
@@ -65,13 +65,13 @@ decodeResponse = tryParse . eitherDecode
         tryParse = either (throwIO . ParserFail) return
 
 class Remote a where
-    remote_ :: (ServerUri -> [Value] -> IO ByteString) -> a
+    remote_ :: (RPCNode -> [Value] -> IO ByteString) -> a
 
 instance (ToJSON a, Remote b) => Remote (a -> b) where
     remote_ f x = remote_ (\u xs -> f u (toJSON x : xs))
 
 instance (Provider p, FromJSON a) => Remote (Web3 p a) where
-    remote_ f = (\u -> Web3 (decodeResponse =<< f u [])) =<< rpcUri
+    remote_ f = (\u -> Web3 (decodeResponse =<< f u [])) =<< rpcNode
 
 -- | JSON-RPC request.
 data Request = Request { rqMethod :: !Text
