@@ -22,18 +22,27 @@ import           Data.String                 (IsString, fromString)
 import qualified Data.Text                   as T
 import           Data.Time.Clock.POSIX       (getPOSIXTime)
 import           Data.Traversable            (for)
-import           Network.Ethereum.Web3       (Address, DefaultProvider,
+import           Network.Ethereum.Web3.Provider   (makeRPCNode, RPCNode)
+import           Network.Ethereum.Web3       (Address,
                                               Provider (..), Web3, Web3Error,
-                                              runWeb3')
+                                              runWeb3)
 import           Network.Ethereum.Web3.Eth   (accounts, blockNumber)
 import           Network.Ethereum.Web3.Types (BlockNumber, Call (..))
 import           System.Environment          (lookupEnv, setEnv)
 import           Test.Hspec.Expectations     (shouldSatisfy)
+import           System.IO.Unsafe
+
 
 data EnvironmentProvider
 
+globalProvider :: RPCNode
+globalProvider = unsafePerformIO $ do
+  uri <- fromMaybe "http://localhost:8545" <$> lookupEnv "WEB3_PROVIDER"
+  makeRPCNode uri
+{-# NOINLINE globalProvider #-}
+
 instance Provider EnvironmentProvider where
-    rpcUri = liftIO (fromMaybe "http://localhost:8545" <$> lookupEnv "WEB3_PROVIDER")
+  rpcNode = return globalProvider
 
 exportStore :: String
 exportStore = "./test-support/.detected-contract-addresses"
@@ -63,13 +72,13 @@ injectExportedEnvironmentVariables = do
 
 runWeb3Configured :: Show a => Web3 EnvironmentProvider a -> IO a
 runWeb3Configured f = do
-    v <- runWeb3' f
+    v <- runWeb3 f
     v `shouldSatisfy` isRight
     let Right a = v in return a
 
 runWeb3Configured' :: Web3 EnvironmentProvider a -> IO a
 runWeb3Configured' f = do
-    Right v <- runWeb3' f
+    Right v <- runWeb3 f
     return v
 
 withAccounts :: ([Address] -> IO a) -> IO a
