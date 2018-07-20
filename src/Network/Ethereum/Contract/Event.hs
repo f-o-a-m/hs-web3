@@ -411,3 +411,19 @@ eventManys' fltrs window handlers = do
       fIds <- openFilters fltrs'
       let pollTo = minBlock fltrs'
       void $ reduceEventStream' (pollFilters fIds pollTo) handlers
+
+-- | Run 'event\'' one block at a time.
+events
+  :: (PollFilters es, QueryAllLogs es, MapHandlers Web3 es (Map (TyCon1 FilterChange) es))
+  => Filters es
+  -> Handlers es (ReaderT Change Web3 EventAction)
+  -> Web3 (Async ())
+events fltrs = forkWeb3 . events' fltrs
+
+-- | Same as 'event', but does not immediately spawn a new thread.
+events'
+  :: (PollFilters es, QueryAllLogs es, MapHandlers Web3 es (Map (TyCon1 FilterChange) es))
+  => Filters es
+  -> Handlers es (ReaderT Change Web3 EventAction)
+  -> Web3 ()
+events' fltrs = eventManys' fltrs 0

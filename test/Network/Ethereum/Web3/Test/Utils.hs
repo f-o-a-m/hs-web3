@@ -55,6 +55,7 @@ rpcUri =  liftIO (fromMaybe "http://localhost:8545" <$> lookupEnv "WEB3_PROVIDER
 data ContractsEnv =
   ContractsEnv { simpleStorage :: Address
                , complexStorage :: Address
+               , linearization :: Address
                }
 
 makeContractsEnv :: IO ContractsEnv
@@ -62,7 +63,8 @@ makeContractsEnv = do
     net <- runWeb3Configured' Net.version
     ss <- grabAddress net <$> BSL.readFile "test-support/build/contracts/abis/SimpleStorage.json"
     cs <- grabAddress net <$> BSL.readFile "test-support/build/contracts/abis/ComplexStorage.json"
-    pure $ ContractsEnv ss cs
+    lin <- grabAddress net <$> BSL.readFile "test-support/build/contracts/abis/Linearization.json"
+    pure $ ContractsEnv ss cs lin
   where
     grabAddress :: T.Text -> BSL.ByteString -> Address
     grabAddress nid bs = case eitherDecode bs :: Either String Value of
