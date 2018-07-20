@@ -29,13 +29,14 @@
 
 module Network.Ethereum.Contract.Event where
 
+import Data.Tagged
 import           Control.Concurrent             (threadDelay)
 import           Control.Exception              (Exception, throwIO)
 import           Control.Monad                  (forM, void, when)
 import           Control.Monad.IO.Class         (liftIO)
 import           Control.Monad.Trans.Class      (lift)
 import           Control.Monad.Trans.Reader     (ReaderT (..))
-import           Data.Type.List
+import Data.Promotion.Prelude.List (Map)
 import           Data.Either                    (rights, lefts)
 import           Data.Machine                   (MachineT, asParts, autoM,
                                                  await, construct, final,
@@ -236,7 +237,7 @@ filtersStream :: FiltersStreamState es
               -> MachineT Web3 k (Filters es)
 filtersStream initialPlan = do
   unfoldPlan initialPlan $ \s -> do
-    end <- lift . mkBlockNumber . minEndBlock . fsssInitialFilters $ initialPlan
+    end <- lift . mkBlockNumber . minBlock . fsssInitialFilters $ initialPlan
     filterPlan end s
   where
     filterPlan :: Quantity -> FiltersStreamState es -> PlanT k (Filters es) Web3 (FiltersStreamState es)
@@ -251,12 +252,14 @@ filtersStream initialPlan = do
                       }
           yield (modifyFilters h fsssInitialFilters)
           filterPlan end initialState { fsssCurrentBlock = to' + 1 }
-    minEndBlock :: Filters es -> DefaultBlock
-    minEndBlock NilFilters = Pending
-    minEndBlock (Filter _ _ e _ :? fs) = e `min` minEndBlock fs
-    modifyFilters :: (forall e. Filter e -> Filter e) -> Filters es -> Filters es
-    modifyFilters _ NilFilters = NilFilters
-    modifyFilters h (f :? fs) = (h f :? modifyFilters h fs)
+
+minBlock :: Filters es -> DefaultBlock
+minBlock NilFilters = Pending
+minBlock (Filter _ _ e _ :? fs) = e `min` minBlock fs
+
+modifyFilters :: (forall e. Filter e -> Filter e) -> Filters es -> Filters es
+modifyFilters _ NilFilters = NilFilters
+modifyFilters h (f :? fs) = (h f :? modifyFilters h fs)
 
 class QueryAllLogs (es :: [*]) where
   queryAllLogs :: Filters es -> Web3 [Field (Map (TyCon1 FilterChange) es)]
@@ -330,3 +333,81 @@ playLogs' :: forall es k.
 playLogs' s = filtersStream s
           ~> autoM queryAllLogs
           ~> autoM (return . sortChanges (Proxy @es))
+
+data TaggedFilterIds (es :: [*]) where
+  TaggedFilterNil :: TaggedFilterIds '[]
+  TaggedFilterCons :: Tagged e Quantity -> TaggedFilterIds es -> TaggedFilterIds (e : es)
+
+class PollFilters (es :: [*]) where
+  openFilters :: Filters es -> Web3 (TaggedFilterIds es)
+  checkFilters :: TaggedFilterIds es -> Web3 [Field (Map (TyCon1 FilterChange) es)]
+  closeFilters :: TaggedFilterIds es -> Web3 ()
+
+instance PollFilters '[] where
+  openFilters _ = pure TaggedFilterNil
+  checkFilters _ = pure []
+  closeFilters _ = pure ()
+
+instance forall e i ni es. (DecodeEvent i ni e, PollFilters es) => PollFilters (e:es) where
+   openFilters (f :? fs) = do
+     fId <- Eth.newFilter f
+     fsIds <- openFilters fs
+     pure $ TaggedFilterCons (Tagged fId) fsIds
+
+   checkFilters (TaggedFilterCons (Tagged fId) fsIds) = do
+     changes <- Eth.getFilterChanges fId
+     filterChanges :: [FilterChange e] <- liftIO . mkFilterChanges $ changes
+     filterChanges' :: [Field (Map (TyCon1 FilterChange) es)] <- checkFilters fsIds
+     pure $ map (CoRec . Identity) filterChanges <> unsafeCoerce filterChanges'
+
+   closeFilters (TaggedFilterCons (Tagged fId) fsIds) = do
+     _ <- Eth.uninstallFilter fId
+     closeFilters fsIds
+
+
+-- | Polls a filter from the given filterId until the target toBlock is reached.
+pollFilters
+  :: PollFilters es
+  => TaggedFilterIds es
+  -> DefaultBlock
+  -> MachineT Web3 k [Field (Map (TyCon1 FilterChange) es)]
+pollFilters is = construct . pollPlan is
+  where
+    -- pollPlan :: TaggedFilterIds es -> DefaultBlock -> PlanT k [Field (Map (TyCon1 FilterChange) es)] Web3 ()
+    pollPlan fIds end = do
+      bn <- lift $ Eth.blockNumber
+      if BlockWithNumber bn > end
+        then do
+          _ <- lift $ closeFilters fIds
+          stop
+        else do
+          liftIO $ threadDelay 1000000
+          changes <- lift $ checkFilters fIds
+          yield changes
+          pollPlan fIds end
+
+eventManys'
+  :: (PollFilters es, QueryAllLogs es, MapHandlers Web3 es (Map (TyCon1 FilterChange) es))
+  => Filters es
+  -> Integer
+  -> Handlers es (ReaderT Change Web3 EventAction)
+  -> Web3 ()
+eventManys' fltrs window handlers = do
+    start <- mkBlockNumber $ minBlock fltrs
+    let initState = FiltersStreamState { fsssCurrentBlock = start
+                                       , fsssInitialFilters = fltrs
+                                       , fsssWindowSize = window
+                                       }
+    mLastProcessedFilterState <- reduceEventStream' (playLogs' initState) handlers
+    case mLastProcessedFilterState of
+      Nothing -> startPolling (modifyFilters (\f -> f {filterFromBlock = BlockWithNumber start}) fltrs)
+      Just (act, lastBlock) -> do
+        end <- mkBlockNumber . minBlock $ fltrs
+        when (act /= TerminateEvent && lastBlock < end) $
+          let pollingFromBlock = lastBlock + 1
+          in startPolling (modifyFilters (\f -> f {filterFromBlock = BlockWithNumber pollingFromBlock}) fltrs)
+  where
+    startPolling fltrs' = do
+      fIds <- openFilters fltrs'
+      let pollTo = minBlock fltrs'
+      void $ reduceEventStream' (pollFilters fIds pollTo) handlers
