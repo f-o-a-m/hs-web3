@@ -37,7 +37,6 @@ import qualified Network.Ethereum.Web3.Eth        as Eth
 import           Network.Ethereum.Web3.Types
 import           System.Environment               (getEnv)
 import           Test.Hspec
-
 import           Data.Vinyl
 import           Data.Vinyl.CoRec
 import           Network.Ethereum.Web3.Test.Utils

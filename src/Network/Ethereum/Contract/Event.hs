@@ -221,10 +221,11 @@ mkBlockNumber bm = case bm of
 
 --------------------------------------------------------------------------------
 
-
 data Filters (es :: [*]) where
   NilFilters :: Filters '[]
   (:?) :: Filter e -> Filters es -> Filters (e ': es)
+
+infixr 5 :?
 
 data FiltersStreamState es =
   FiltersStreamState { fsssCurrentBlock   :: Quantity
@@ -373,7 +374,7 @@ pollFilters
 pollFilters is = construct . pollPlan is
   where
     -- pollPlan :: TaggedFilterIds es -> DefaultBlock -> PlanT k [Field (Map (TyCon1 FilterChange) es)] Web3 ()
-    pollPlan fIds end = do
+    pollPlan (fIds :: TaggedFilterIds es) end = do
       bn <- lift $ Eth.blockNumber
       if BlockWithNumber bn > end
         then do
@@ -382,7 +383,7 @@ pollFilters is = construct . pollPlan is
         else do
           liftIO $ threadDelay 1000000
           changes <- lift $ checkFilters fIds
-          yield changes
+          yield $ sortChanges (Proxy @es) changes
           pollPlan fIds end
 
 eventManys'
