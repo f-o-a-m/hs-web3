@@ -1,10 +1,10 @@
 {-# LANGUAGE DataKinds             #-}
 {-# LANGUAGE DeriveGeneric         #-}
-{-# LANGUAGE NamedFieldPuns        #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE KindSignatures        #-}
 {-# LANGUAGE LambdaCase            #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE NamedFieldPuns        #-}
 {-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE QuasiQuotes           #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
@@ -24,22 +24,23 @@
 
 module Network.Ethereum.Web3.Test.LinearizationSpec where
 
-import           Control.Concurrent.Async         (waitAny, wait)
+import           Control.Concurrent.Async         (wait, waitAny)
 import           Control.Concurrent.MVar
 import           Control.Monad                    (void)
 import           Control.Monad.IO.Class           (liftIO)
 import           Data.Default
+import           Data.Either
+import           Network.Ethereum.Contract.Event
 import           Network.Ethereum.Contract.TH
 import           Network.Ethereum.Web3            hiding (convert)
-import           Network.Ethereum.Contract.Event
+import qualified Network.Ethereum.Web3.Eth        as Eth
 import           Network.Ethereum.Web3.Types
 import           System.Environment               (getEnv)
-import Data.Either
 import           Test.Hspec
 
+import           Data.Vinyl
+import           Data.Vinyl.CoRec
 import           Network.Ethereum.Web3.Test.Utils
-import Data.Vinyl.CoRec
-import Data.Vinyl
 
 [abiFrom|test-support/build/contracts/abis/Linearization.json|]
 
@@ -55,6 +56,8 @@ linearizationSpec = describe "can bundle and linearize events" $ do
       res <- takeMVar var
       res `shouldSatisfy` isLeft
     it "can call e21" $ \(ContractsEnv{linearization}, primaryAccount) -> do
+      -- wait on the next block
+      runWeb3Configured Eth.blockNumber >>= \bn -> awaitBlock (bn + 1)
       let theCall = callFromTo primaryAccount linearization
       var <- monitorE1OrE2 linearization
       _ <- runWeb3Configured' (e21 theCall)

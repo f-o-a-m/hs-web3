@@ -30,20 +30,21 @@ module Network.JsonRpc.TinyClient (
   , remote
   ) where
 
-import           Control.Applicative    ((<|>))
-import           Control.Exception      (Exception)
-import           Control.Monad          ((<=<))
-import           Control.Monad.Catch    (MonadThrow, throwM)
-import           Control.Monad.IO.Class (MonadIO, liftIO)
-import           Control.Monad.Reader   (MonadReader, ask)
+import           Control.Applicative            ((<|>))
+import           Control.Exception              (Exception)
+import           Control.Monad                  ((<=<))
+import           Control.Monad.Catch            (MonadThrow, throwM)
+import           Control.Monad.IO.Class         (MonadIO, liftIO)
+import           Control.Monad.Reader           (MonadReader, ask)
 import           Data.Aeson
-import           Data.ByteString.Lazy   (ByteString)
-import           Data.Text              (Text, unpack)
+import           Data.ByteString.Lazy           (ByteString)
+import           Data.Text                      (Text, unpack)
 import           Network.Ethereum.Web3.Provider
-import           Network.HTTP.Client    (Manager, RequestBody (RequestBodyLBS),
-                                         httpLbs, method, parseRequest,
-                                         requestBody, requestHeaders,
-                                         responseBody)
+import           Network.HTTP.Client            (Manager,
+                                                 RequestBody (RequestBodyLBS),
+                                                 httpLbs, method, parseRequest,
+                                                 requestBody, requestHeaders,
+                                                 responseBody)
 
 instance FromJSON a => Remote Web3 (Web3 a)
 

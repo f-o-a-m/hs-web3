@@ -1,6 +1,6 @@
-{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE DeriveGeneric     #-}
+{-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE DeriveGeneric #-}
 
 module Network.Ethereum.Web3.Test.Utils
   ( makeEnv
@@ -17,14 +17,14 @@ module Network.Ethereum.Web3.Test.Utils
 
 import           Control.Concurrent                (MVar, threadDelay,
                                                     tryTakeMVar)
+import           Control.Lens                      ((^?))
 import           Control.Monad.IO.Class            (liftIO)
 import           Data.Aeson                        (FromJSON, eitherDecode)
-import           Data.Aeson.Types                  (Value(..))
-import           Data.Aeson.Lens                   (_Object, key, _JSON)
+import           Data.Aeson.Lens                   (key, _JSON, _Object)
+import           Data.Aeson.Types                  (Value (..))
 import qualified Data.ByteString.Lazy              as BSL
 import           Data.Default
 import           Data.Either                       (isRight)
-import           Control.Lens                      ((^?))
 import           Data.List.Split                   (splitOn)
 import           Data.Maybe                        (fromMaybe)
 import           Data.Ratio                        (numerator)
@@ -35,12 +35,13 @@ import           Data.Traversable                  (for)
 import           GHC.Generics                      (Generic)
 import           Network.Ethereum.ABI.Prim.Address (Address)
 import           Network.Ethereum.Web3.Eth         (accounts, blockNumber)
-import           Network.Ethereum.Web3.Provider    (Provider (..), JsonRpcProvider(..)
-                                                   , Web3, Web3Error, runWeb3')
+import           Network.Ethereum.Web3.Net         as Net
+import           Network.Ethereum.Web3.Provider    (JsonRpcProvider (..),
+                                                    Provider (..), Web3,
+                                                    Web3Error, runWeb3')
 import           Network.Ethereum.Web3.Types       (Call (..), Quantity)
 import           System.Environment                (lookupEnv, setEnv)
 import           Test.Hspec.Expectations           (shouldSatisfy)
-import           Network.Ethereum.Web3.Net         as Net
 
 
 makeEnv :: IO (ContractsEnv, Address)
@@ -53,9 +54,9 @@ rpcUri :: IO String
 rpcUri =  liftIO (fromMaybe "http://localhost:8545" <$> lookupEnv "WEB3_PROVIDER")
 
 data ContractsEnv =
-  ContractsEnv { simpleStorage :: Address
+  ContractsEnv { simpleStorage  :: Address
                , complexStorage :: Address
-               , linearization :: Address
+               , linearization  :: Address
                }
 
 makeContractsEnv :: IO ContractsEnv

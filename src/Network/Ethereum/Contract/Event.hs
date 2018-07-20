@@ -1,18 +1,17 @@
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE RecordWildCards       #-}
-{-# LANGUAGE ScopedTypeVariables   #-}
-{-# LANGUAGE FunctionalDependencies   #-}
-{-# LANGUAGE TypeFamilies          #-}
-{-# LANGUAGE GADTs                 #-}
-{-# LANGUAGE TypeOperators         #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE DeriveFunctor #-}
-{-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE DataKinds              #-}
+{-# LANGUAGE DeriveFunctor          #-}
+{-# LANGUAGE FlexibleContexts       #-}
+{-# LANGUAGE FlexibleInstances      #-}
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE GADTs                  #-}
+{-# LANGUAGE MultiParamTypeClasses  #-}
+{-# LANGUAGE RankNTypes             #-}
+{-# LANGUAGE RecordWildCards        #-}
+{-# LANGUAGE ScopedTypeVariables    #-}
+{-# LANGUAGE TypeApplications       #-}
+{-# LANGUAGE TypeFamilies           #-}
+{-# LANGUAGE TypeOperators          #-}
+{-# LANGUAGE UndecidableInstances   #-}
 
 
 -- |
@@ -29,35 +28,35 @@
 
 module Network.Ethereum.Contract.Event where
 
-import Data.Tagged
 import           Control.Concurrent             (threadDelay)
+import           Control.Concurrent.Async       (Async)
 import           Control.Exception              (Exception, throwIO)
 import           Control.Monad                  (forM, void, when)
 import           Control.Monad.IO.Class         (liftIO)
 import           Control.Monad.Trans.Class      (lift)
 import           Control.Monad.Trans.Reader     (ReaderT (..))
-import Data.Promotion.Prelude.List (Map)
-import           Data.Either                    (rights, lefts)
+import           Data.Either                    (lefts, rights)
+import           Data.List                      (sortOn)
 import           Data.Machine                   (MachineT, asParts, autoM,
                                                  await, construct, final,
-                                                 repeatedly, runT,
-                                                 unfoldPlan, (~>))
-import Data.Vinyl.Functor (Identity(..))
-import Data.List (sortOn)
-import Unsafe.Coerce (unsafeCoerce)
-import Data.Singletons (TyCon1)
-import Data.Monoid ((<>))
+                                                 repeatedly, runT, unfoldPlan,
+                                                 (~>))
 import           Data.Machine.Plan              (PlanT, stop, yield)
 import           Data.Maybe                     (catMaybes, listToMaybe)
-import Data.Proxy (Proxy(..))
-import           Data.Vinyl.CoRec
+import           Data.Monoid                    ((<>))
+import           Data.Promotion.Prelude.List    (Map)
+import           Data.Proxy                     (Proxy (..))
+import           Data.Singletons                (TyCon1)
+import           Data.Tagged
 import           Data.Vinyl
-import           Control.Concurrent.Async       (Async)
+import           Data.Vinyl.CoRec
+import           Data.Vinyl.Functor             (Identity (..))
 import           Network.Ethereum.ABI.Event     (DecodeEvent (..))
 import qualified Network.Ethereum.Web3.Eth      as Eth
 import           Network.Ethereum.Web3.Provider (Web3, forkWeb3)
 import           Network.Ethereum.Web3.Types    (Change (..), DefaultBlock (..),
                                                  Filter (..), Quantity)
+import           Unsafe.Coerce                  (unsafeCoerce)
 
 -- | Event callback control response
 data EventAction = ContinueEvent
@@ -254,12 +253,12 @@ filtersStream initialPlan = do
           filterPlan end initialState { fsssCurrentBlock = to' + 1 }
 
 minBlock :: Filters es -> DefaultBlock
-minBlock NilFilters = Pending
+minBlock NilFilters             = Pending
 minBlock (Filter _ _ e _ :? fs) = e `min` minBlock fs
 
 modifyFilters :: (forall e. Filter e -> Filter e) -> Filters es -> Filters es
 modifyFilters _ NilFilters = NilFilters
-modifyFilters h (f :? fs) = (h f :? modifyFilters h fs)
+modifyFilters h (f :? fs)  = (h f :? modifyFilters h fs)
 
 class QueryAllLogs (es :: [*]) where
   queryAllLogs :: Filters es -> Web3 [Field (Map (TyCon1 FilterChange) es)]
