@@ -30,16 +30,16 @@ import           Control.Monad                    (void)
 import           Control.Monad.IO.Class           (liftIO)
 import           Data.Default
 import           Data.Either
+import           Data.Vinyl
+import           Data.Vinyl.CoRec
 import           Network.Ethereum.Contract.Event
 import           Network.Ethereum.Contract.TH
 import           Network.Ethereum.Web3            hiding (convert)
 import qualified Network.Ethereum.Web3.Eth        as Eth
+import           Network.Ethereum.Web3.Test.Utils
 import           Network.Ethereum.Web3.Types
 import           System.Environment               (getEnv)
 import           Test.Hspec
-import           Data.Vinyl
-import           Data.Vinyl.CoRec
-import           Network.Ethereum.Web3.Test.Utils
 
 [abiFrom|test-support/build/contracts/abis/Linearization.json|]
 

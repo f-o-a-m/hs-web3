@@ -1,6 +1,5 @@
 {-# LANGUAGE DataKinds              #-}
 {-# LANGUAGE DeriveFunctor          #-}
-{-# LANGUAGE StandaloneDeriving          #-}
 {-# LANGUAGE FlexibleContexts       #-}
 {-# LANGUAGE FlexibleInstances      #-}
 {-# LANGUAGE FunctionalDependencies #-}
@@ -9,6 +8,7 @@
 {-# LANGUAGE RankNTypes             #-}
 {-# LANGUAGE RecordWildCards        #-}
 {-# LANGUAGE ScopedTypeVariables    #-}
+{-# LANGUAGE StandaloneDeriving     #-}
 {-# LANGUAGE TypeApplications       #-}
 {-# LANGUAGE TypeFamilies           #-}
 {-# LANGUAGE TypeOperators          #-}
@@ -43,16 +43,15 @@ import           Data.Machine                   (MachineT, asParts, autoM,
                                                  repeatedly, runT, unfoldPlan,
                                                  (~>))
 import           Data.Machine.Plan              (PlanT, stop, yield)
-import           Data.Maybe                     (catMaybes, listToMaybe, fromJust)
+import           Data.Maybe                     (catMaybes, fromJust,
+                                                 listToMaybe)
 import           Data.Monoid                    ((<>))
-import           Data.Promotion.Prelude.List    (Map)
 import           Data.Proxy                     (Proxy (..))
-import           Data.Singletons                (TyCon1)
 import           Data.Tagged
 import           Data.Vinyl
-import           Data.Vinyl.TypeLevel
 import           Data.Vinyl.CoRec
 import           Data.Vinyl.Functor
+import           Data.Vinyl.TypeLevel
 import           Network.Ethereum.ABI.Event     (DecodeEvent (..))
 import qualified Network.Ethereum.Web3.Eth      as Eth
 import           Network.Ethereum.Web3.Provider (Web3, forkWeb3)
@@ -281,9 +280,6 @@ instance QueryAllLogs '[] where
   type WithChange '[] = '[]
   queryAllLogs NilFilters = pure []
 
--- The unsafeCoerce should actually be safe, it just needs to preserve
--- `RElem a es (RIndex a es) => RElem a (e:es) (RIndex a (e:es))` for any a in es. But I think
--- this is true since the type list is updated in both arguments of RElem in the same way.
 instance forall e i ni es.
   ( DecodeEvent i ni e
   , QueryAllLogs es
@@ -293,11 +289,11 @@ instance forall e i ni es.
 
   type WithChange (e:es) = FilterChange e : WithChange es
 
-  queryAllLogs ((f  :: Filter e) :? (fs :: Filters es)) = do
+  queryAllLogs (f  :? fs) = do
     changes <- Eth.getLogs f
-    filterChanges :: [FilterChange e] <- liftIO . mkFilterChanges $ changes
-    filterChanges' :: [Field (WithChange es)] <- queryAllLogs fs
-    pure $ map (CoRec . Identity) filterChanges <> (map weakenCoRec filterChanges')
+    filterChanges <- liftIO . mkFilterChanges @_ @_ @e $ changes
+    filterChanges' <- queryAllLogs fs
+    pure $ map (CoRec . Identity) filterChanges <> map weakenCoRec filterChanges'
 
 class HasLogIndex a where
   getLogIndex :: a -> Maybe (Quantity, Quantity)
@@ -306,17 +302,13 @@ instance HasLogIndex (FilterChange e) where
   getLogIndex FilterChange{..} =
     (,) <$> changeBlockNumber filterChangeRawChange <*> changeLogIndex filterChangeRawChange
 
--- Is unsafeCoerce actually safe here? If you can't resolve every variant to (Map (TyCon1 FilterChange))
--- then doesn't typecheck.
 sortChanges
-  :: ( AllAllSat '[HasLogIndex] (Map (TyCon1 FilterChange) es)
-     , RecApplicative (Map (TyCon1 FilterChange) es)
-     , AllAllSat '[HasLogIndex] (Map (TyCon1 FilterChange) es)
+  :: ( AllAllSat '[HasLogIndex] es
+     , RecApplicative es
      )
-  => Proxy es
-  -> [Field (Map (TyCon1 FilterChange) es)]
-  -> [Field (Map (TyCon1 FilterChange) es)]
-sortChanges _ changes =
+  => [Field es]
+  -> [Field es]
+sortChanges changes =
   let sorterProj change = onField (Proxy @'[HasLogIndex]) getLogIndex change
   in sortOn sorterProj changes
 
@@ -338,13 +330,11 @@ instance ( Monad m
     in (H f') :& mapHandlers fs
 
 
-
--- | Effectively a mapM_ over the machine using the given handler.
 reduceEventStream'
   :: ( Monad m
-     , MapHandlers m es (Map (TyCon1 FilterChange) es)
+     , MapHandlers m es (WithChange es)
      )
-  => MachineT m k [Field (Map (TyCon1 FilterChange) es)]
+  => MachineT m k [Field (WithChange es)]
   -> Handlers es (ReaderT Change m EventAction)
   -> m (Maybe (EventAction, Quantity))
 reduceEventStream' filterChanges handlers = fmap listToMaybe . runT $
@@ -366,28 +356,25 @@ reduceEventStream' filterChanges handlers = fmap listToMaybe . runT $
 playLogs'
   :: forall es k.
      ( QueryAllLogs es
-     , WithChange es ~ Map (TyCon1 FilterChange) es
-     , AllAllSat '[HasLogIndex] (Map (TyCon1 FilterChange) es)
-     , RecApplicative (Map (TyCon1 FilterChange) es)
+     , AllAllSat '[HasLogIndex] (WithChange es)
+     , RecApplicative (WithChange es)
      )
   => FiltersStreamState es
   -> MachineT Web3 k [Field (WithChange es)]
 playLogs' s = filtersStream s
           ~> autoM queryAllLogs
-          ~> autoM (return . sortChanges (Proxy @es))
+          ~> autoM (return . sortChanges)
 
 data TaggedFilterIds (es :: [*]) where
   TaggedFilterNil :: TaggedFilterIds '[]
   TaggedFilterCons :: Tagged e Quantity -> TaggedFilterIds es -> TaggedFilterIds (e : es)
 
-class PollFilters (es :: [*]) where
-  type WithChange' es :: [*]
+class QueryAllLogs es => PollFilters (es :: [*]) where
   openFilters :: Filters es -> Web3 (TaggedFilterIds es)
-  checkFilters :: TaggedFilterIds es -> Web3 [Field (WithChange' es)]
+  checkFilters :: TaggedFilterIds es -> Web3 [Field (WithChange es)]
   closeFilters :: TaggedFilterIds es -> Web3 ()
 
 instance PollFilters '[] where
-  type WithChange' '[] = '[]
   openFilters _ = pure TaggedFilterNil
   checkFilters _ = pure []
   closeFilters _ = pure ()
@@ -395,10 +382,9 @@ instance PollFilters '[] where
 instance forall e i ni es.
   ( DecodeEvent i ni e
   , PollFilters es
-  , RecApplicative (WithChange' es)
-  , FoldRec (FilterChange e : WithChange' es) (WithChange' es)
+  , RecApplicative (WithChange es)
+  , FoldRec (FilterChange e : WithChange es) (WithChange es)
   ) => PollFilters (e:es) where
-  type WithChange' (e:es) = (FilterChange e : WithChange' es)
   openFilters (f :? fs) = do
     fId <- Eth.newFilter f
     fsIds <- openFilters fs
@@ -406,9 +392,9 @@ instance forall e i ni es.
 
   checkFilters (TaggedFilterCons (Tagged fId) fsIds) = do
     changes <- Eth.getFilterChanges fId
-    filterChanges :: [FilterChange e] <- liftIO . mkFilterChanges $ changes
-    filterChanges' :: [Field (WithChange' es)] <- checkFilters fsIds
-    pure $ map (CoRec . Identity) filterChanges <>  map weakenCoRec filterChanges'
+    filterChanges <- liftIO . mkFilterChanges @_ @_ @e $ changes
+    filterChanges' :: [Field (WithChange es)] <- checkFilters fsIds
+    pure  $ map (CoRec . Identity) filterChanges <>  map weakenCoRec filterChanges'
 
   closeFilters (TaggedFilterCons (Tagged fId) fsIds) = do
     _ <- Eth.uninstallFilter fId
@@ -418,14 +404,12 @@ instance forall e i ni es.
 -- | Polls a filter from the given filterId until the target toBlock is reached.
 pollFilters
   :: ( PollFilters es
-     , AllConstrained Show (Map (TyCon1 FilterChange) es)
-     , RecApplicative (Map (TyCon1 FilterChange) es)
-     , AllAllSat '[HasLogIndex] (Map (TyCon1 FilterChange) es)
-     , WithChange' es ~ Map (TyCon1 FilterChange) es
+     , RecApplicative (WithChange es)
+     , AllAllSat '[HasLogIndex] (WithChange es)
      )
   => TaggedFilterIds es
   -> DefaultBlock
-  -> MachineT Web3 k [Field (Map (TyCon1 FilterChange) es)]
+  -> MachineT Web3 k [Field (WithChange es)]
 pollFilters is = construct . pollPlan is
   where
     -- pollPlan :: TaggedFilterIds es -> DefaultBlock -> PlanT k [Field (Map (TyCon1 FilterChange) es)] Web3 ()
@@ -437,20 +421,16 @@ pollFilters is = construct . pollPlan is
           stop
         else do
           liftIO $ threadDelay 1000000
-          changes <- lift $ sortChanges (Proxy @es) <$> checkFilters fIds
-          liftIO . print $ changes
-          yield $  changes
+          changes <- lift $ sortChanges <$> checkFilters fIds
+          yield changes
           pollPlan fIds end
 
 eventManys'
   :: ( PollFilters es
      , QueryAllLogs es
-     , WithChange es ~ (Map (TyCon1 FilterChange) es)
-     , WithChange' es ~ Map (TyCon1 FilterChange) es
-     , MapHandlers Web3 es (Map (TyCon1 FilterChange) es)
-     , AllAllSat '[HasLogIndex] (Map (TyCon1 FilterChange) es)
-     , AllConstrained Show (Map (TyCon1 FilterChange) es)
-     , RecApplicative (Map (TyCon1 FilterChange) es)
+     , MapHandlers Web3 es (WithChange es)
+     , AllAllSat '[HasLogIndex] (WithChange es)
+     , RecApplicative (WithChange es)
      )
   => Filters es
   -> Integer
@@ -480,12 +460,9 @@ eventManys' fltrs window handlers = do
 events
   :: ( PollFilters es
      , QueryAllLogs es
-     , WithChange es ~ Map (TyCon1 FilterChange) es
-     , WithChange' es ~ Map (TyCon1 FilterChange) es
-     , MapHandlers Web3 es (Map (TyCon1 FilterChange) es)
-     , AllAllSat '[HasLogIndex] (Map (TyCon1 FilterChange) es)
-     , AllConstrained Show (Map (TyCon1 FilterChange) es)
-     , RecApplicative (Map (TyCon1 FilterChange) es)
+     , MapHandlers Web3 es (WithChange es)
+     , AllAllSat '[HasLogIndex] (WithChange es)
+     , RecApplicative (WithChange es)
      )
   => Filters es
   -> Handlers es (ReaderT Change Web3 EventAction)
@@ -494,14 +471,11 @@ events fltrs = forkWeb3 . events' fltrs
 
 -- | Same as 'event', but does not immediately spawn a new thread.
 events'
-  :: (PollFilters es
+  :: ( PollFilters es
      , QueryAllLogs es
-     , WithChange es ~ Map (TyCon1 FilterChange) es
-     , WithChange' es ~ Map (TyCon1 FilterChange) es
-     , MapHandlers Web3 es (Map (TyCon1 FilterChange) es)
-     , AllAllSat '[HasLogIndex] (Map (TyCon1 FilterChange) es)
-     , AllConstrained Show (Map (TyCon1 FilterChange) es)
-     , RecApplicative (Map (TyCon1 FilterChange) es)
+     , MapHandlers Web3 es (WithChange es)
+     , AllAllSat '[HasLogIndex] (WithChange es)
+     , RecApplicative (WithChange es)
      )
   => Filters es
   -> Handlers es (ReaderT Change Web3 EventAction)
