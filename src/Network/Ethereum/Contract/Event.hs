@@ -393,7 +393,7 @@ instance forall e i ni es.
   checkFilters (TaggedFilterCons (Tagged fId) fsIds) = do
     changes <- Eth.getFilterChanges fId
     filterChanges <- liftIO . mkFilterChanges @_ @_ @e $ changes
-    filterChanges' :: [Field (WithChange es)] <- checkFilters fsIds
+    filterChanges' <- checkFilters @es fsIds
     pure  $ map (CoRec . Identity) filterChanges <>  map weakenCoRec filterChanges'
 
   closeFilters (TaggedFilterCons (Tagged fId) fsIds) = do
