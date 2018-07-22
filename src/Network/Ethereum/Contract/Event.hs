@@ -1,5 +1,4 @@
 {-# LANGUAGE DataKinds              #-}
-{-# LANGUAGE DeriveFunctor          #-}
 {-# LANGUAGE FlexibleContexts       #-}
 {-# LANGUAGE FlexibleInstances      #-}
 {-# LANGUAGE FunctionalDependencies #-}
@@ -8,7 +7,6 @@
 {-# LANGUAGE RankNTypes             #-}
 {-# LANGUAGE RecordWildCards        #-}
 {-# LANGUAGE ScopedTypeVariables    #-}
-{-# LANGUAGE StandaloneDeriving     #-}
 {-# LANGUAGE TypeApplications       #-}
 {-# LANGUAGE TypeFamilies           #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
@@ -28,7 +26,28 @@
 -- Ethereum contract event support.
 --
 
-module Network.Ethereum.Contract.Event where
+module Network.Ethereum.Contract.Event
+  ( EventAction(..)
+
+  -- * Single event monitors
+  , event
+  , event'
+  , eventMany'
+
+  -- * MultiEventMonitors
+  , MultiFilter(..)
+  , minBlock
+  , modifyMultiFilter
+  , multiEvent
+  , multiEvent'
+  , multiEventMany'
+
+  -- * ReExports
+  , Handlers
+  , Handler(..)
+  , Rec(..)
+
+  ) where
 
 import           Control.Concurrent             (threadDelay)
 import           Control.Concurrent.Async       (Async)
@@ -140,9 +159,7 @@ reduceEventStream filterChanges handler = fmap listToMaybe . runT $
 
 data FilterChange a = FilterChange { filterChangeRawChange :: Change
                                    , filterChangeEvent     :: a
-                                   } deriving Functor
-
-deriving instance Show a => Show (FilterChange a)
+                                   }
 
 -- | 'playLogs' streams the 'filterStream' and calls eth_getLogs on these 'Filter' objects.
 playLogs :: DecodeEvent i ni e
@@ -223,47 +240,54 @@ mkBlockNumber bm = case bm of
   _                  -> Eth.blockNumber
 
 --------------------------------------------------------------------------------
+-- | MultiFilters
+--------------------------------------------------------------------------------
 
-data Filters (es :: [*]) where
-  NilFilters :: Filters '[]
-  (:?) :: Filter e -> Filters es -> Filters (e ': es)
+data MultiFilter (es :: [*]) where
+  NilFilters :: MultiFilter '[]
+  (:?) :: Filter e -> MultiFilter es -> MultiFilter (e ': es)
 
 infixr 5 :?
 
-data FiltersStreamState es =
-  FiltersStreamState { fsssCurrentBlock   :: Quantity
-                     , fsssInitialFilters :: Filters es
-                     , fsssWindowSize     :: Integer
-                     }
+data MultiFilterStreamState es =
+  MultiFilterStreamState { mfssCurrentBlock       :: Quantity
+                         , mfssInitialMultiFilter :: MultiFilter es
+                         , mfssWindowSize         :: Integer
+                         }
 
-filtersStream :: FiltersStreamState es
-              -> MachineT Web3 k (Filters es)
-filtersStream initialPlan = do
+multiFilterStream
+  :: MultiFilterStreamState es
+  -> MachineT Web3 k (MultiFilter es)
+multiFilterStream initialPlan = do
   unfoldPlan initialPlan $ \s -> do
-    end <- lift . mkBlockNumber . minBlock . fsssInitialFilters $ initialPlan
+    end <- lift . mkBlockNumber . minBlock . mfssInitialMultiFilter $ initialPlan
     filterPlan end s
   where
-    filterPlan :: Quantity -> FiltersStreamState es -> PlanT k (Filters es) Web3 (FiltersStreamState es)
-    filterPlan end initialState@FiltersStreamState{..} = do
-      if fsssCurrentBlock > end
+    filterPlan :: Quantity -> MultiFilterStreamState es -> PlanT k (MultiFilter es) Web3 (MultiFilterStreamState es)
+    filterPlan end initialState@MultiFilterStreamState{..} = do
+      if mfssCurrentBlock > end
         then stop
         else do
-          let to' = min end $ fsssCurrentBlock + fromInteger fsssWindowSize
+          let to' = min end $ mfssCurrentBlock + fromInteger mfssWindowSize
               h :: forall e . Filter e -> Filter e
-              h f = f { filterFromBlock = BlockWithNumber fsssCurrentBlock
+              h f = f { filterFromBlock = BlockWithNumber mfssCurrentBlock
                       , filterToBlock = BlockWithNumber to'
                       }
-          yield (modifyFilters h fsssInitialFilters)
-          filterPlan end initialState { fsssCurrentBlock = to' + 1 }
+          yield (modifyMultiFilter h mfssInitialMultiFilter)
+          filterPlan end initialState { mfssCurrentBlock = to' + 1 }
 
-minBlock :: Filters es -> DefaultBlock
+minBlock
+  :: MultiFilter es
+  -> DefaultBlock
 minBlock NilFilters             = Pending
 minBlock (Filter _ _ e _ :? fs) = e `min` minBlock fs
 
-modifyFilters :: (forall e. Filter e -> Filter e) -> Filters es -> Filters es
-modifyFilters _ NilFilters = NilFilters
-modifyFilters h (f :? fs)  = (h f :? modifyFilters h fs)
-
+modifyMultiFilter
+  :: (forall e. Filter e -> Filter e)
+  -> MultiFilter es
+  -> MultiFilter es
+modifyMultiFilter _ NilFilters = NilFilters
+modifyMultiFilter h (f :? fs)  = (h f :? modifyMultiFilter h fs)
 
 weakenCoRec
   :: ( RecApplicative ts
@@ -278,7 +302,7 @@ type family WithChange (es :: [*]) = (es' :: [*]) | es' -> es where
   WithChange (e : es) = FilterChange e : WithChange es
 
 class QueryAllLogs (es :: [*]) where
-  queryAllLogs :: Filters es -> Web3 [Field (WithChange es)]
+  queryAllLogs :: MultiFilter es -> Web3 [Field (WithChange es)]
 
 instance QueryAllLogs '[] where
   queryAllLogs NilFilters = pure []
@@ -321,9 +345,11 @@ class MapHandlers m es es' where
 instance Monad m => MapHandlers m '[] '[] where
   mapHandlers RNil = RNil
 
-instance ( Monad m
-         , MapHandlers m es es'
-         ) => MapHandlers m (e : es) (FilterChange e : es') where
+instance
+  ( Monad m
+  , MapHandlers m es es'
+  ) => MapHandlers m (e : es) (FilterChange e : es') where
+
   mapHandlers ((H f) :& fs) =
     let f' = \FilterChange{..} -> do
           act <- runReaderT (f filterChangeEvent) filterChangeRawChange
@@ -331,14 +357,14 @@ instance ( Monad m
     in (H f') :& mapHandlers fs
 
 
-reduceEventStream'
+reduceMultiEventStream
   :: ( Monad m
      , MapHandlers m es (WithChange es)
      )
   => MachineT m k [Field (WithChange es)]
   -> Handlers es (ReaderT Change m EventAction)
   -> m (Maybe (EventAction, Quantity))
-reduceEventStream' filterChanges handlers = fmap listToMaybe . runT $
+reduceMultiEventStream filterChanges handlers = fmap listToMaybe . runT $
        filterChanges
     ~> autoM (processChanges handlers)
     ~> asParts
@@ -354,31 +380,31 @@ reduceEventStream' filterChanges handlers = fmap listToMaybe . runT $
         forM changes $ \fc -> match fc (mapHandlers handlers')
 
 -- | 'playLogs' streams the 'filterStream' and calls eth_getLogs on these 'Filter' objects.
-playLogs'
+playMultiLogs
   :: forall es k.
      ( QueryAllLogs es
      , AllAllSat '[HasLogIndex] (WithChange es)
      , RecApplicative (WithChange es)
      )
-  => FiltersStreamState es
+  => MultiFilterStreamState es
   -> MachineT Web3 k [Field (WithChange es)]
-playLogs' s = filtersStream s
-          ~> autoM queryAllLogs
-          ~> autoM (return . sortChanges)
+playMultiLogs s = fmap sortChanges $
+     multiFilterStream s
+  ~> autoM queryAllLogs
 
 data TaggedFilterIds (es :: [*]) where
   TaggedFilterNil :: TaggedFilterIds '[]
   TaggedFilterCons :: Tagged e Quantity -> TaggedFilterIds es -> TaggedFilterIds (e : es)
 
 class PollFilters (es :: [*]) where
-  openFilters :: Filters es -> Web3 (TaggedFilterIds es)
-  checkFilters :: TaggedFilterIds es -> Web3 [Field (WithChange es)]
-  closeFilters :: TaggedFilterIds es -> Web3 ()
+  openMultiFilter :: MultiFilter es -> Web3 (TaggedFilterIds es)
+  checkMultiFilter :: TaggedFilterIds es -> Web3 [Field (WithChange es)]
+  closeMultiFilter :: TaggedFilterIds es -> Web3 ()
 
 instance PollFilters '[] where
-  openFilters _ = pure TaggedFilterNil
-  checkFilters _ = pure []
-  closeFilters _ = pure ()
+  openMultiFilter _ = pure TaggedFilterNil
+  checkMultiFilter _ = pure []
+  closeMultiFilter _ = pure ()
 
 instance forall e i ni es.
   ( DecodeEvent i ni e
@@ -386,24 +412,24 @@ instance forall e i ni es.
   , RecApplicative (WithChange es)
   , FoldRec (FilterChange e : WithChange es) (WithChange es)
   ) => PollFilters (e:es) where
-  openFilters (f :? fs) = do
+  openMultiFilter (f :? fs) = do
     fId <- Eth.newFilter f
-    fsIds <- openFilters fs
+    fsIds <- openMultiFilter fs
     pure $ TaggedFilterCons (Tagged fId) fsIds
 
-  checkFilters (TaggedFilterCons (Tagged fId) fsIds) = do
+  checkMultiFilter (TaggedFilterCons (Tagged fId) fsIds) = do
     changes <- Eth.getFilterChanges fId
     filterChanges <- liftIO . mkFilterChanges @_ @_ @e $ changes
-    filterChanges' <- checkFilters @es fsIds
+    filterChanges' <- checkMultiFilter @es fsIds
     pure  $ map (CoRec . Identity) filterChanges <>  map weakenCoRec filterChanges'
 
-  closeFilters (TaggedFilterCons (Tagged fId) fsIds) = do
+  closeMultiFilter (TaggedFilterCons (Tagged fId) fsIds) = do
     _ <- Eth.uninstallFilter fId
-    closeFilters fsIds
+    closeMultiFilter fsIds
 
 
 -- | Polls a filter from the given filterId until the target toBlock is reached.
-pollFilters
+pollMultiFilter
   :: ( PollFilters es
      , RecApplicative (WithChange es)
      , AllAllSat '[HasLogIndex] (WithChange es)
@@ -411,74 +437,73 @@ pollFilters
   => TaggedFilterIds es
   -> DefaultBlock
   -> MachineT Web3 k [Field (WithChange es)]
-pollFilters is = construct . pollPlan is
+pollMultiFilter is = construct . pollPlan is
   where
     -- pollPlan :: TaggedFilterIds es -> DefaultBlock -> PlanT k [Field (Map (TyCon1 FilterChange) es)] Web3 ()
     pollPlan (fIds :: TaggedFilterIds es) end = do
       bn <- lift $ Eth.blockNumber
       if BlockWithNumber bn > end
         then do
-          _ <- lift $ closeFilters fIds
+          _ <- lift $ closeMultiFilter fIds
           stop
         else do
           liftIO $ threadDelay 1000000
-          changes <- lift $ sortChanges <$> checkFilters fIds
+          changes <- lift $ sortChanges <$> checkMultiFilter fIds
           yield changes
           pollPlan fIds end
 
-eventManys'
+multiEventMany'
   :: ( PollFilters es
      , QueryAllLogs es
      , MapHandlers Web3 es (WithChange es)
      , AllAllSat '[HasLogIndex] (WithChange es)
      , RecApplicative (WithChange es)
      )
-  => Filters es
+  => MultiFilter es
   -> Integer
   -> Handlers es (ReaderT Change Web3 EventAction)
   -> Web3 ()
-eventManys' fltrs window handlers = do
+multiEventMany' fltrs window handlers = do
     start <- mkBlockNumber $ minBlock fltrs
-    let initState = FiltersStreamState { fsssCurrentBlock = start
-                                       , fsssInitialFilters = fltrs
-                                       , fsssWindowSize = window
-                                       }
-    mLastProcessedFilterState <- reduceEventStream' (playLogs' initState) handlers
+    let initState =
+          MultiFilterStreamState { mfssCurrentBlock = start
+                                 , mfssInitialMultiFilter = fltrs
+                                 , mfssWindowSize = window
+                                 }
+    mLastProcessedFilterState <- reduceMultiEventStream (playMultiLogs initState) handlers
     case mLastProcessedFilterState of
-      Nothing -> startPolling (modifyFilters (\f -> f {filterFromBlock = BlockWithNumber start}) fltrs)
+      Nothing -> startPolling (modifyMultiFilter (\f -> f {filterFromBlock = BlockWithNumber start}) fltrs)
       Just (act, lastBlock) -> do
         end <- mkBlockNumber . minBlock $ fltrs
         when (act /= TerminateEvent && lastBlock < end) $
           let pollingFromBlock = lastBlock + 1
-          in startPolling (modifyFilters (\f -> f {filterFromBlock = BlockWithNumber pollingFromBlock}) fltrs)
+          in startPolling (modifyMultiFilter (\f -> f {filterFromBlock = BlockWithNumber pollingFromBlock}) fltrs)
   where
     startPolling fltrs' = do
-      fIds <- openFilters fltrs'
+      fIds <- openMultiFilter fltrs'
       let pollTo = minBlock fltrs'
-      void $ reduceEventStream' (pollFilters fIds pollTo) handlers
+      void $ reduceMultiEventStream (pollMultiFilter fIds pollTo) handlers
 
--- | Run 'event\'' one block at a time.
-events
+multiEvent
   :: ( PollFilters es
      , QueryAllLogs es
      , MapHandlers Web3 es (WithChange es)
      , AllAllSat '[HasLogIndex] (WithChange es)
      , RecApplicative (WithChange es)
      )
-  => Filters es
+  => MultiFilter es
   -> Handlers es (ReaderT Change Web3 EventAction)
   -> Web3 (Async ())
-events fltrs = forkWeb3 . events' fltrs
+multiEvent fltrs = forkWeb3 . multiEvent' fltrs
 
--- | Same as 'event', but does not immediately spawn a new thread.
-events'
+multiEvent'
   :: ( PollFilters es
      , QueryAllLogs es
      , MapHandlers Web3 es (WithChange es)
      , AllAllSat '[HasLogIndex] (WithChange es)
      , RecApplicative (WithChange es)
      )
-  => Filters es
+  => MultiFilter es
   -> Handlers es (ReaderT Change Web3 EventAction)
   -> Web3 ()
-events' fltrs = eventManys' fltrs 0
+multiEvent' fltrs = multiEventMany' fltrs 0

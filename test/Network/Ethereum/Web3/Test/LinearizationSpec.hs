@@ -30,8 +30,6 @@ import           Control.Monad                    (void)
 import           Control.Monad.IO.Class           (liftIO)
 import           Data.Default
 import           Data.Either
-import           Data.Vinyl
-import           Data.Vinyl.CoRec
 import           Network.Ethereum.Contract.Event
 import           Network.Ethereum.Contract.TH
 import           Network.Ethereum.Web3            hiding (convert)
@@ -78,5 +76,5 @@ monitorE1OrE2 addr = do
         liftIO $ putMVar var (Right e2)
         pure TerminateEvent
       handlers = H handler1 :& H handler2 :& RNil
-  _ <- runWeb3Configured' $ events filters handlers
+  _ <- runWeb3Configured' $ multiEvent filters handlers
   pure var
