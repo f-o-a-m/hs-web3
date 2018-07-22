@@ -11,6 +11,7 @@
 {-# LANGUAGE StandaloneDeriving     #-}
 {-# LANGUAGE TypeApplications       #-}
 {-# LANGUAGE TypeFamilies           #-}
+{-# LANGUAGE TypeFamilyDependencies #-}
 {-# LANGUAGE TypeOperators          #-}
 {-# LANGUAGE UndecidableInstances   #-}
 
@@ -272,12 +273,14 @@ weakenCoRec
   -> Field (t ': ts)
 weakenCoRec = fromJust . firstField . (Compose Nothing :&) . coRecToRec
 
+type family WithChange (es :: [*]) = (es' :: [*]) | es' -> es where
+  WithChange '[] = '[]
+  WithChange (e : es) = FilterChange e : WithChange es
+
 class QueryAllLogs (es :: [*]) where
-  type WithChange es :: [*]
   queryAllLogs :: Filters es -> Web3 [Field (WithChange es)]
 
 instance QueryAllLogs '[] where
-  type WithChange '[] = '[]
   queryAllLogs NilFilters = pure []
 
 instance forall e i ni es.
@@ -286,8 +289,6 @@ instance forall e i ni es.
   , RecApplicative (WithChange es)
   , FoldRec (FilterChange e : WithChange es) (WithChange es)
   ) => QueryAllLogs (e:es) where
-
-  type WithChange (e:es) = FilterChange e : WithChange es
 
   queryAllLogs (f  :? fs) = do
     changes <- Eth.getLogs f
@@ -369,7 +370,7 @@ data TaggedFilterIds (es :: [*]) where
   TaggedFilterNil :: TaggedFilterIds '[]
   TaggedFilterCons :: Tagged e Quantity -> TaggedFilterIds es -> TaggedFilterIds (e : es)
 
-class QueryAllLogs es => PollFilters (es :: [*]) where
+class PollFilters (es :: [*]) where
   openFilters :: Filters es -> Web3 (TaggedFilterIds es)
   checkFilters :: TaggedFilterIds es -> Web3 [Field (WithChange es)]
   closeFilters :: TaggedFilterIds es -> Web3 ()
