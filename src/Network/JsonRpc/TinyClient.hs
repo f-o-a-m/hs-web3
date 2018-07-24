@@ -45,6 +45,7 @@ import           Network.HTTP.Client            (Manager,
                                                  httpLbs, method, parseRequest,
                                                  requestBody, requestHeaders,
                                                  responseBody)
+import           System.Random                  (randomIO)
 
 instance FromJSON a => Remote Web3 (Web3 a)
 
@@ -140,7 +141,9 @@ call :: (MonadIO m,
      => MethodName
      -> [Value]
      -> m ByteString
-call n = connection . encode . Request n 1 . toJSON
+call m r = do
+  rid <- liftIO randomIO
+  connection . encode $ Request m rid (toJSON r)
   where
     connection body = do
         ((Provider (HttpProvider uri) _), manager) <- ask
@@ -148,7 +151,8 @@ call n = connection . encode . Request n 1 . toJSON
         let request' = request
                      { requestBody = RequestBodyLBS body
                      , requestHeaders = [("Content-Type", "application/json")]
-                     , method = "POST" }
+                     , method = "POST"
+                     }
         responseBody <$> liftIO (httpLbs request' manager)
 
 data JsonRpcException
