@@ -95,42 +95,36 @@ singleFlood from to = liftIO $ do
                    3 -> e3
                    4 -> e4
                    _ -> error "got a number outside of (1,4) after randomR (1,4)"
-
-  retryWeb3Configured (fnToCall theCall)
+  runWeb3Configured' (fnToCall theCall)
 
 floodSpec :: SpecWith (ContractsEnv, Address)
 floodSpec = describe "can correctly demonstrate the difference between `multiEvent` and multiple `event'`s" $ do
-      it "properly linearizes with `multiEvent` when flooded" $ \(ContractsEnv{linearization}, primaryAccount) -> do
-        recvSem <- liftIO . atomically $ newTSem floodSemCount
-        q <- monitorAllFourMulti linearization (Just recvSem)
-        sleepBlocks 5 -- to let the filter settle so we dont block indefinitely on missing events?
+      it "properly linearizes with `multiEvent` when flooded and doesn't with multiple `event`s" $
+        \(ContractsEnv{linearization}, primaryAccount) -> do
+          multiQ <- monitorAllFourMulti linearization
+          parQ <- monitorAllFourPar linearization
+          sleepBlocks 10 -- to let the filter settle so we dont block indefinitely on missing events?
 
-        -- flood em and wait for all to finish
-        hashes <- forM [1..floodCount] . const $ singleFlood primaryAccount linearization
-        void $ forM hashes awaitTxMined
+          -- flood em and wait for all to finish
+          void . forM [1..floodCount] . const $ singleFlood primaryAccount linearization
+          sleepBlocks 10 -- to let the event listeners catch up
 
-        -- wait for all multiEvents to be received and flush em out
-        receivedEvents <- liftIO . atomically $ flushTQueue q
+          -- wait for all multiEvents to be received and flush em out
+          multiReceivedEvents <- liftIO . atomically $ flushTQueue multiQ
+          parReceivedEvents <- liftIO . atomically $ flushTQueue parQ
 
-        -- the events pushed into the TQueue should already be sorted if they happened in the right order
-        length receivedEvents `shouldSatisfy` (>= (floodSemCount `div` 4)) -- did we get at least 1/4 of the events?
-        sort receivedEvents `shouldBe` receivedEvents
+          -- did we get at least 1/4 of the events? (this is a gotcha when flooding, sometimes nonces get repeated)
+          length multiReceivedEvents `shouldSatisfy` (>= (floodCount `div` 4))
+          length parReceivedEvents `shouldSatisfy` (>= (floodCount `div` 4))
 
-      it "doesn't properly linearize with multiple `event`s when flooded" $ \(ContractsEnv{linearization}, primaryAccount) -> do
-        recvSem <- liftIO . atomically $ newTSem floodSemCount
-        q <- monitorAllFourPar linearization (Just recvSem)
-        sleepBlocks 5 -- to let the filter settle so we dont block indefinitely on missing events?
+          -- did both listeners see the same amount of events?
+          length multiReceivedEvents `shouldBe` length parReceivedEvents
 
-        -- flood em and wait for all to finish
-        hashes <- forM [1..floodCount] . const $ singleFlood primaryAccount linearization
-        void $ forM hashes awaitTxMined
+          -- the events pushed into the multi TQueue should already be sorted if they happened in the right order
+          sort multiReceivedEvents `shouldBe` multiReceivedEvents
+          -- the events pushed into the TQueue should not be sorted if they didnt come in in the right order
+          sort parReceivedEvents `shouldNotBe` parReceivedEvents
 
-        -- wait for all multiEvents to be received and flush em out
-        receivedEvents <- liftIO . atomically $ flushTQueue q
-
-        -- the events pushed into the TQueue should not be sorted if they didnt come in in the right order
-        length receivedEvents `shouldSatisfy` (>= (floodSemCount `div` 4)) -- did we get at least 1/4 of the events?
-        sort receivedEvents `shouldNotBe` receivedEvents
 
 monitorE1OrE2
   :: Address
@@ -162,13 +156,12 @@ instance {-# OVERLAPPING #-} Ord (EventTag, Integer, Integer) where
 
 monitorAllFourMulti
   :: Address
-  -> Maybe TSem
   -> IO (TQueue (EventTag, Integer, Integer)) -- (EventTag, BlockNumber, LogIndex)
-monitorAllFourMulti addr sem = do
+monitorAllFourMulti addr = do
   q <- newTQueueIO
   let f :: forall a. Default (Filter a) => Filter a
       f = defFilter addr
-      h = enqueueingHandler sem q
+      h = enqueueingHandler q
       filters = f @E1 :? f @E2 :? f @E3 :? f @E4 :? NilFilters
       handlers = h ETE1 :& h ETE2 :& h ETE3 :& h ETE4 :& RNil
   void . runWeb3Configured' $ multiEvent filters handlers
@@ -176,32 +169,27 @@ monitorAllFourMulti addr sem = do
 
 monitorAllFourPar
   :: Address
-  -> Maybe TSem
   -> IO (TQueue (EventTag, Integer, Integer)) -- (EventTag, BlockNumber, LogIndex)
-monitorAllFourPar addr sem = do
+monitorAllFourPar addr = do
   q <- newTQueueIO
   let f :: forall a. Default (Filter a) => Filter a
       f = defFilter addr
-      h = enqueueingHandler sem q
+      h = enqueueingHandler q
       unH (H h) = h
 
-  void . runWeb3Configured' $ event' (f @E1) (unH $ h ETE1)
-  void . runWeb3Configured' $ event' (f @E2) (unH $ h ETE2)
-  void . runWeb3Configured' $ event' (f @E3) (unH $ h ETE3)
-  void . runWeb3Configured' $ event' (f @E4) (unH $ h ETE4)
+  void . forkIO . runWeb3Configured' $ event' (f @E1) (unH $ h ETE1)
+  void . forkIO . runWeb3Configured' $ event' (f @E2) (unH $ h ETE2)
+  void . forkIO . runWeb3Configured' $ event' (f @E3) (unH $ h ETE3)
+  void . forkIO . runWeb3Configured' $ event' (f @E4) (unH $ h ETE4)
   return q
 
 defFilter :: forall a. Default (Filter a) => Address -> Filter a
 defFilter addr = (def :: Filter a) { filterAddress = Just [addr] }
 
-enqueueingHandler :: forall a. Maybe TSem -> TQueue (EventTag, Integer, Integer) -> EventTag -> Handler (ReaderT Change Web3 EventAction) a
-enqueueingHandler sem q tag = H . const $ do
+enqueueingHandler :: forall a. TQueue (EventTag, Integer, Integer) -> EventTag -> Handler (ReaderT Change Web3 EventAction) a
+enqueueingHandler q tag = H . const $ do
   Change{..} <- ask
   let bn = unQuantity $ fromJust changeBlockNumber
       li = unQuantity $ fromJust changeLogIndex
-  liftIO . atomically $ do
-    writeTQueue q (tag, bn, li)
-    case sem of
-      Nothing      -> pure ()
-      Just recvSem -> signalTSem recvSem
+  liftIO . atomically $ writeTQueue q (tag, bn, li)
   pure ContinueEvent

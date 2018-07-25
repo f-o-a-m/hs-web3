@@ -142,7 +142,7 @@ microtime = numerator . toRational . (* 1000000) <$> getPOSIXTime
 awaitBlock :: Quantity -> IO ()
 awaitBlock bn = do
     bn' <- retryWeb3Configured blockNumber
-    putStrLn $ "awaiting block " ++ show bn ++ ", currently " ++ show bn'
+    -- putStrLn $ "awaiting block " ++ show bn ++ ", currently " ++ show bn'
     if bn' >= bn
         then return ()
         else threadDelay 1000000 >> awaitBlock bn
