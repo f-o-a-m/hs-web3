@@ -20,6 +20,7 @@ module Network.Ethereum.Contract.Event.SingleFilter
   , eventMany'
   , eventNoFilter
   , eventNoFilter'
+  , eventNoFilterWith'
   , eventManyNoFilter'
   )
 
@@ -210,16 +211,26 @@ eventNoFilter'
   -> Integer
   -> (e -> ReaderT Change Web3 EventAction)
   -> Web3 ()
-eventNoFilter' fltr lag = eventManyNoFilter' fltr 0 lag
+eventNoFilter' fltr lag = eventManyNoFilter' fltr 0 lag throwIO
+
+-- | Same as 'evenNoFilter'', but handles parse failures with the provided function.
+eventNoFilterWith'
+  :: DecodeEvent i ni e
+  => Filter e
+  -> (EventParseFailure -> IO ())
+  -> (e -> ReaderT Change Web3 EventAction)
+  -> Web3 ()
+eventNoFilterWith' fltr parseFailHandler = eventManyNoFilter' fltr 0 0 parseFailHandler
 
 eventManyNoFilter'
   :: DecodeEvent i ni e
   => Filter e
   -> Integer -- window
   -> Integer -- lag
+  -> (EventParseFailure -> IO ())
   -> (e -> ReaderT Change Web3 EventAction)
   -> Web3 ()
-eventManyNoFilter' fltr window lag handler = do
+eventManyNoFilter' fltr window lag parseFailHandler handler = do
     start <- mkBlockNumber $ filterFromBlock fltr
     let initState = FilterStreamState { fssCurrentBlock = start
                                       , fssInitialFilter = fltr
@@ -235,7 +246,7 @@ eventManyNoFilter' fltr window lag handler = do
                                                    , fssLag = lag
                                                    }
 
-        in void $ reduceEventStream (playNewLogs pollingFilterState) handler
+        in void $ reduceEventStream (playNewLogs parseFailHandler pollingFilterState) handler
       Just (act, lastBlock) -> do
         end <- mkBlockNumber . filterToBlock $ fltr
         when (act /= TerminateEvent && lastBlock < end) $
@@ -244,17 +255,18 @@ eventManyNoFilter' fltr window lag handler = do
                                                      , fssWindowSize = 1
                                                      , fssLag = lag
                                                      }
-          in void $ reduceEventStream (playNewLogs pollingFilterState) handler
+          in void $ reduceEventStream (playNewLogs parseFailHandler pollingFilterState) handler
 
 -- | 'playLogs' streams the 'filterStream' and calls eth_getLogs on these 'Filter' objects.
 playNewLogs
   :: DecodeEvent i ni e
-  => FilterStreamState e
+  => (EventParseFailure -> IO ())
+  -> FilterStreamState e
   -> MachineT Web3 k [FilterChange e]
-playNewLogs s =
+playNewLogs parseFailHandler s =
      newFilterStream s
   ~> autoM Eth.getLogs
-  ~> autoM (liftIO . mkFilterChanges throwIO)
+  ~> autoM (liftIO . mkFilterChanges parseFailHandler)
 
 newFilterStream
   :: FilterStreamState e
