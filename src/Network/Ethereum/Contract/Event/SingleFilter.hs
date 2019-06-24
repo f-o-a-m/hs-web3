@@ -237,7 +237,7 @@ eventManyNoFilter' fltr window lag parseFailHandler handler = do
                                       , fssWindowSize = window
                                       , fssLag = lag
                                       }
-    mLastProcessedFilterState <- reduceEventStream (playOldLogs throwIO initState) handler
+    mLastProcessedFilterState <- reduceEventStream (playOldLogs parseFailHandler initState) handler
     case mLastProcessedFilterState of
       Nothing ->
         let pollingFilterState = FilterStreamState { fssCurrentBlock = start
