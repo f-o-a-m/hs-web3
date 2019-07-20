@@ -3,6 +3,7 @@
 {-# LANGUAGE DeriveGeneric              #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings          #-}
+{-# LANGUAGE FlexibleInstances          #-}
 {-# LANGUAGE TemplateHaskell            #-}
 
 -- |
@@ -24,6 +25,7 @@ import           Data.Aeson                        (FromJSON (..), Options (fiel
                                                     Value (Bool, String),
                                                     defaultOptions, object,
                                                     (.=))
+import Data.Void (Void)
 import           Data.Aeson.TH                     (deriveJSON)
 import           Data.Default                      (Default (..))
 import           Data.Monoid                       ((<>))
@@ -177,6 +179,16 @@ instance ToJSON DefaultBlock where
     toJSON (BlockWithNumber bn) = toJSON bn
     toJSON parameter            = toJSON . toLowerFirst . show $ parameter
 
+-- | Topic type for when a single topic is sought after or when any matching topics are found.
+data FilterTopic = SingleTopic (BytesN 32)
+                 | AnyTopics [BytesN 32]
+    deriving (Eq, Show, Generic)
+instance ToJSON FilterTopic where
+    toJSON (SingleTopic bytes)     = toJSON bytes
+    toJSON (AnyTopics listOfBytes) = toJSON listOfBytes
+instance IsString FilterTopic where
+    fromString = SingleTopic . fromString
+
 -- | Low-level event filter data structure.
 data Filter e = Filter
   { filterAddress   :: !(Maybe [Address])
@@ -185,7 +197,7 @@ data Filter e = Filter
   -- ^ QUANTITY|TAG - (optional, default: "latest") Integer block number, or "latest" for the last mined block or "pending", "earliest" for not yet mined transactions.
   , filterToBlock   :: !DefaultBlock
   -- ^ QUANTITY|TAG - (optional, default: "latest") Integer block number, or "latest" for the last mined block or "pending", "earliest" for not yet mined transactions.
-  , filterTopics    :: !(Maybe [Maybe (BytesN 32)])
+  , filterTopics    :: !(Maybe [Maybe FilterTopic])
   -- ^ Array of DATA, - (optional) Array of 32 Bytes DATA topics. Topics are order-dependent. Each topic can also be an array of DATA with "or" options.
   -- Topics are order-dependent. A transaction with a log with topics [A, B] will be matched by the following topic filters:
   -- * [] "anything"
@@ -194,6 +206,9 @@ data Filter e = Filter
   -- * [A, B] "A in first position AND B in second position (and anything after)"
   -- * [[A, B], [A, B]] "(A OR B) in first position AND (A OR B) in second position (and anything after)"
   } deriving (Eq, Show, Generic)
+
+instance Default (Filter Void) where
+    def = Filter Nothing Latest Latest Nothing
 
 instance ToJSON (Filter e) where
     toJSON f = object [ "address"   .= filterAddress f

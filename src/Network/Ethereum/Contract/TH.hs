@@ -64,7 +64,9 @@ import           Network.Ethereum.ABI.Json        (ContractABI (..),
                                                    EventArg (..),
                                                    FunctionArg (..),
                                                    SolidityType (..), eventId,
-                                                   methodId, parseSolidityFunctionArgType, parseSolidityEventArgType)
+                                                   methodId,
+                                                   parseSolidityEventArgType,
+                                                   parseSolidityFunctionArgType)
 import           Network.Ethereum.ABI.Prim        (Address, Bytes, BytesN, IntN,
                                                    ListN, Singleton (..), UIntN)
 import           Network.Ethereum.Contract.Method (Method (..), call, sendTx)

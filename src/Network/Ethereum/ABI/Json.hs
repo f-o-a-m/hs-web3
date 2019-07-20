@@ -45,9 +45,9 @@ import           Data.String.Extra  (toLowerFirst)
 
 -- | Method argument
 data FunctionArg = FunctionArg
-  { funArgName :: Text
+  { funArgName       :: Text
   -- ^ Argument name
-  , funArgType :: Text
+  , funArgType       :: Text
   -- ^ Argument type
   , funArgComponents :: Maybe [FunctionArg]
   -- ^ Argument components for tuples
@@ -166,7 +166,7 @@ signature (DConstructor inputs) = "(" <> args inputs <> ")"
     args [] = ""
     args [x] = funArgType x
     args (x:xs) = case funArgComponents x of
-      Nothing -> funArgType x <> "," <> args xs
+      Nothing   -> funArgType x <> "," <> args xs
       Just cmps -> "(" <> args cmps <> ")," <> args xs
 
 signature (DFallback _) = "()"
@@ -177,7 +177,7 @@ signature (DFunction name _ inputs _) = name <> "(" <> args inputs <> ")"
     args [] = ""
     args [x] = funArgType x
     args (x:xs) = case funArgComponents x of
-      Nothing -> funArgType x <> "," <> args xs
+      Nothing   -> funArgType x <> "," <> args xs
       Just cmps -> "(" <> args cmps <> ")," <> args xs
 
 signature (DEvent name inputs _) = name <> "(" <> args inputs <> ")"
@@ -290,8 +290,8 @@ solidityTypeParser =
 parseSolidityFunctionArgType :: FunctionArg -> Either ParseError SolidityType
 parseSolidityFunctionArgType (FunctionArg _ typ mcmps) = case mcmps of
   Nothing -> parse solidityTypeParser "Solidity" typ
-  Just cmps -> 
-    SolidityTuple (length cmps) 
+  Just cmps ->
+    SolidityTuple (length cmps)
     <$>  mapM parseSolidityFunctionArgType cmps
 
 
