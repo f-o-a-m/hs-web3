@@ -1,9 +1,9 @@
 {-# LANGUAGE DataKinds                  #-}
 {-# LANGUAGE DeriveDataTypeable         #-}
 {-# LANGUAGE DeriveGeneric              #-}
+{-# LANGUAGE FlexibleInstances          #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings          #-}
-{-# LANGUAGE FlexibleInstances          #-}
 {-# LANGUAGE TemplateHaskell            #-}
 
 -- |
@@ -25,7 +25,6 @@ import           Data.Aeson                        (FromJSON (..), Options (fiel
                                                     Value (Bool, String),
                                                     defaultOptions, object,
                                                     (.=))
-import Data.Void (Void)
 import           Data.Aeson.TH                     (deriveJSON)
 import           Data.Default                      (Default (..))
 import           Data.Monoid                       ((<>))
@@ -34,6 +33,7 @@ import qualified Data.Text                         as T (pack)
 import qualified Data.Text.Lazy.Builder            as B (toLazyText)
 import qualified Data.Text.Lazy.Builder.Int        as B (hexadecimal)
 import qualified Data.Text.Read                    as R (decimal, hexadecimal)
+import           Data.Void                         (Void)
 import           GHC.Generics                      (Generic)
 
 import           Data.String.Extra                 (toLowerFirst)

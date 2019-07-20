@@ -14,34 +14,27 @@
 {-# LANGUAGE UndecidableInstances   #-}
 
 module Network.Ethereum.Contract.Event.SimpleFilter
-  ( eventManyNoFilter'
+  ( simpleFilter
+  , FilterMiddleware(..)
   )
 where
 
-import           Control.Concurrent                     (threadDelay)
-import           Control.Concurrent.Async               (Async)
-import           Control.Exception                      (throwIO)
-import           Control.Monad                          (forM, void, when)
-import           Control.Monad.IO.Class                 (MonadIO (..))
+import           Control.Monad                          (void, when)
 import           Control.Monad.Trans.Class              (lift)
-import           Control.Monad.Trans.Reader             (ReaderT (..), ask)
 import           Data.Machine                           (MachineT, asParts,
-                                                         autoM, await,
-                                                         construct, final,
+                                                         autoM, await, final,
                                                          repeatedly, runT,
                                                          unfoldPlan, (~>))
 import           Data.Machine.Plan                      (PlanT, stop, yield)
-import           Data.Maybe                             (catMaybes, listToMaybe,
-                                                         mapMaybe)
-import           Network.Ethereum.ABI.Event             (DecodeEvent (..))
+import           Data.Maybe                             (listToMaybe, mapMaybe)
 import           Network.Ethereum.Contract.Event.Common
 import qualified Network.Ethereum.Web3.Eth              as Eth
-import           Network.Ethereum.Web3.Provider         (Web3, forkWeb3)
+import           Network.Ethereum.Web3.Provider         (Web3)
 import           Network.Ethereum.Web3.Types            (Change (..),
                                                          DefaultBlock (..),
                                                          Filter (..), Quantity)
 
--- | Middleware that 
+-- | Middleware for intercepting Filters before they are used to get logs.
 type FilterMiddleware e = Filter e -> Web3 (Filter e)
 
 -- | Effectively a mapM_ over the machine using the given handler.
@@ -51,7 +44,7 @@ reduceEventStream
   -> Web3 (Maybe (EventAction, Quantity))
 reduceEventStream changes handler = fmap listToMaybe . runT $
      changes
-  ~> autoM processChanges 
+  ~> autoM processChanges
   ~> asParts
   ~> runWhile (\(act, _) -> act /= TerminateEvent)
   ~> final
@@ -66,17 +59,17 @@ reduceEventStream changes handler = fmap listToMaybe . runT $
       if act == TerminateEvent
         then pure [(act, 0)]
         else case mapMaybe changeBlockNumber changes' of
-          [] -> pure []
+          []  -> pure []
           bns -> pure [(act, maximum bns)]
 
-eventManyNoFilter'
-  :: forall e k. Filter e
+simpleFilter
+  :: forall e. Filter e
   -> Integer -- window
   -> Integer -- lag
   -> FilterMiddleware e
   -> ([Change] -> Web3 EventAction)
   -> Web3 ()
-eventManyNoFilter' fltr window lag middleware handler = do
+simpleFilter fltr window lag middleware handler = do
   start <- mkBlockNumber $ filterFromBlock fltr
   let initState = FilterStreamState { fssCurrentBlock  = start
                                     , fssInitialFilter = fltr
@@ -114,9 +107,9 @@ playOldLogs :: forall e k. FilterMiddleware e -> FilterStreamState e -> MachineT
 playOldLogs middleware s = playLogs middleware $ filterStream s
 
 playLogs :: forall e k. FilterMiddleware e -> MachineT Web3 k (Filter e) -> MachineT Web3 k [Change]
-playLogs middleware s = 
-     s  
-  ~> autoM middleware 
+playLogs middleware s =
+     s
+  ~> autoM middleware
   ~> autoM Eth.getLogs
 
 -- | 'filterStream' is a machine which represents taking an initial filter
