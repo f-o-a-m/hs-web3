@@ -1,14 +1,11 @@
 {-# LANGUAGE DataKinds              #-}
 {-# LANGUAGE FlexibleContexts       #-}
 {-# LANGUAGE FlexibleInstances      #-}
-{-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GADTs                  #-}
 {-# LANGUAGE MultiParamTypeClasses  #-}
 {-# LANGUAGE RankNTypes             #-}
 {-# LANGUAGE RecordWildCards        #-}
 {-# LANGUAGE ScopedTypeVariables    #-}
-{-# LANGUAGE TypeApplications       #-}
-{-# LANGUAGE TypeFamilies           #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
 {-# LANGUAGE TypeOperators          #-}
 {-# LANGUAGE UndecidableInstances   #-}
@@ -33,6 +30,7 @@ import           Network.Ethereum.Web3.Provider         (Web3)
 import           Network.Ethereum.Web3.Types            (Change (..),
                                                          DefaultBlock (..),
                                                          Filter (..), Quantity)
+
 
 -- | Middleware for intercepting Filters before they are used to get logs.
 type FilterMiddleware e = Filter e -> Web3 (Filter e)
@@ -86,8 +84,7 @@ simpleFilter fltr window lag middleware handler = do
                                                  }
       in  void $ reduceEventStream (playNewLogs middleware pollingFilterState) handler
     Just (act, lastBlock) -> do
-      end <- mkBlockNumber . filterToBlock $ fltr
-      when (act /= TerminateEvent && lastBlock < end)
+      when (act /= TerminateEvent && (BlockWithNumber lastBlock < filterToBlock fltr))
         $ let pollingFilterState = FilterStreamState
                 { fssCurrentBlock  = lastBlock + 1
                 , fssInitialFilter = fltr
