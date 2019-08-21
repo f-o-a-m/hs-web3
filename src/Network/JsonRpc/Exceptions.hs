@@ -1,9 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Network.JsonRpc.Exceptions where
 
-import           Control.Exception              (Exception)
-import           Data.Aeson                     (Value, FromJSON(..), (.:), (.:?), withObject)
-import           Data.Text                      (Text, unpack)
+import           Control.Exception (Exception)
+import           Data.Aeson        (FromJSON (..), Value, withObject, (.:),
+                                    (.:?))
+import           Data.Text         (Text, unpack)
 
 -- | JSON-RPC error message
 data RpcError = RpcError

@@ -45,8 +45,8 @@ import           Network.HTTP.Client            (Manager,
                                                  httpLbs, method, parseRequest,
                                                  requestBody, requestHeaders,
                                                  responseBody)
-import           System.Random                  (randomIO)
 import           Network.JsonRpc.Exceptions
+import           System.Random                  (randomIO)
 
 instance FromJSON a => Remote Web3 (Web3 a)
 

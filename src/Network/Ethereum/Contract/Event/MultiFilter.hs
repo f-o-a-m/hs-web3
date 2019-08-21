@@ -37,6 +37,7 @@ module  Network.Ethereum.Contract.Event.MultiFilter  -- * MultiEventMonitors
 
 import           Control.Concurrent                     (threadDelay)
 import           Control.Concurrent.Async               (Async)
+import           Control.Exception                      (throwIO)
 import           Control.Monad                          (forM, void, when)
 import           Control.Monad.IO.Class                 (MonadIO (..))
 import           Control.Monad.Trans.Class              (lift)
@@ -208,7 +209,7 @@ instance forall e i ni es.
 
   queryAllLogs (f  :? fs) = do
     changes <- Eth.getLogs f
-    filterChanges <- liftIO . mkFilterChanges @_ @_ @e $ changes
+    filterChanges <- liftIO . mkFilterChanges @_ @_ @e throwIO $ changes
     filterChanges' <- queryAllLogs fs
     pure $ map (CoRec . Identity) filterChanges <> map weakenCoRec filterChanges'
 
@@ -311,7 +312,7 @@ instance forall e i ni es.
 
   checkMultiFilter (TaggedFilterCons (Tagged fId) fsIds) = do
     changes <- Eth.getFilterChanges fId
-    filterChanges <- liftIO . mkFilterChanges @_ @_ @e $ changes
+    filterChanges <- liftIO . mkFilterChanges @_ @_ @e throwIO $ changes
     filterChanges' <- checkMultiFilter @es fsIds
     pure  $ map (CoRec . Identity) filterChanges <>  map weakenCoRec filterChanges'
 

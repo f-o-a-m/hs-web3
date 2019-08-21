@@ -20,18 +20,18 @@
 module Network.Ethereum.Web3.Provider where
 
 import           Control.Concurrent.Async      (Async, async)
-import           Control.Exception             (Exception, try, catch)
+import           Control.Exception             (Exception, catch, try)
 import           Control.Monad.Catch           (MonadThrow)
+import           Control.Monad.Catch           (throwM)
 import           Control.Monad.IO.Class        (MonadIO (..))
 import           Control.Monad.Reader          (MonadReader (..))
 import           Control.Monad.Trans.Reader    (ReaderT, mapReaderT, runReaderT)
-import           Control.Monad.Catch           (throwM)
 import           Data.ByteString               (ByteString)
 import           Data.Default                  (Default (..))
 import           GHC.Generics                  (Generic)
 import           Network.Ethereum.Web3.Logging
 import           Network.HTTP.Client           (Manager, newManager)
-import           Network.JsonRpc.Exceptions    (JsonRpcException(..))
+import           Network.JsonRpc.Exceptions    (JsonRpcException (..))
 
 #ifdef TLS_MANAGER
 import           Network.HTTP.Client.TLS       (tlsManagerSettings)

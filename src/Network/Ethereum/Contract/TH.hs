@@ -64,7 +64,9 @@ import           Network.Ethereum.ABI.Json        (ContractABI (..),
                                                    EventArg (..),
                                                    FunctionArg (..),
                                                    SolidityType (..), eventId,
-                                                   methodId, parseSolidityType)
+                                                   methodId,
+                                                   parseSolidityEventArgType,
+                                                   parseSolidityFunctionArgType)
 import           Network.Ethereum.ABI.Prim        (Address, Bytes, BytesN, IntN,
                                                    ListN, Singleton (..), UIntN)
 import           Network.Ethereum.Contract.Method (Method (..), call, sendTx)
@@ -109,6 +111,7 @@ toHSType s = case s of
     SolidityString      -> conT ''Text
     SolidityBytesN n    -> appT (conT ''BytesN) (numLit n)
     SolidityBytes       -> conT ''Bytes
+    SolidityTuple n as  -> foldl ( \b a -> appT b $ toHSType a ) ( tupleT n ) as
     SolidityVector ns a -> expandVector ns a
     SolidityArray a     -> appT listT $ toHSType a
   where
@@ -121,15 +124,21 @@ toHSType s = case s of
           else (conT ''ListN) `appT` numLit n `appT` expandVector rest a
       _ -> error $ "Impossible Nothing branch in `expandVector`: " ++ show ns ++ " " ++ show a
 
-typeQ :: Text -> TypeQ
-typeQ t = case parseSolidityType t of
+typeFuncQ :: FunctionArg -> TypeQ
+typeFuncQ t = case parseSolidityFunctionArgType t of
   Left e   -> error $ "Unable to parse solidity type: " ++ show e
   Right ty -> toHSType ty
 
+typeEventQ :: EventArg -> TypeQ
+typeEventQ t = case parseSolidityEventArgType t of
+  Left e   -> error $ "Unable to parse solidity type: " ++ show e
+  Right ty -> toHSType ty
+
+
 -- | Function argument to TH type
 funBangType :: FunctionArg -> BangTypeQ
-funBangType (FunctionArg _ typ) =
-    bangType (bang sourceNoUnpack sourceStrict) (typeQ typ)
+funBangType fa =
+    bangType (bang sourceNoUnpack sourceStrict) (typeFuncQ fa)
 
 funWrapper :: Bool
            -- ^ Is constant?
@@ -164,11 +173,11 @@ funWrapper c name dname args result =
     arrowing []       = error "Impossible branch call"
     arrowing [x]      = x
     arrowing (x : xs) = [t|$x -> $(arrowing xs)|]
-    inputT  = fmap (typeQ . funArgType) args
+    inputT  = fmap typeFuncQ args
     outputT = case result of
         Nothing  -> [t|Web3 ()|]
-        Just [x] -> [t|Web3 $(typeQ $ funArgType x)|]
-        Just xs  -> let outs = fmap (typeQ . funArgType) xs
+        Just [x] -> [t|Web3 $(typeFuncQ x)|]
+        Just xs  -> let outs = fmap typeFuncQ xs
                     in  [t|Web3 $(foldl appT (tupleT (length xs)) outs)|]
 
 mkDecl :: Declaration -> DecsQ
@@ -182,7 +191,7 @@ mkDecl ev@(DEvent uncheckedName inputs anonymous) = sequence
     , instanceD' nonIndexedName (conT ''Generic) []
     , instanceD' nonIndexedName (conT ''ABIType) [funD' 'isDynamic [] [|const False|]]
     , instanceD' nonIndexedName (conT ''ABIGet) []
-    , dataD' allName (recC allName (map (\(n, a) -> ((\(b,t) -> return (n,b,t)) <=< toBang <=< typeQ $ a)) allArgs)) derivingD
+    , dataD' allName (recC allName (map (\(n, a) -> ((\(b,t) -> return (n,b,t)) <=< toBang <=< typeEventQ $ a)) allArgs)) derivingD
     , instanceD' allName (conT ''Generic) []
     , instanceD (cxt [])
         (pure $ ConT ''IndexedEvent `AppT` ConT indexedName `AppT` ConT nonIndexedName `AppT` ConT allName)
@@ -195,13 +204,14 @@ mkDecl ev@(DEvent uncheckedName inputs anonymous) = sequence
     name = if Char.toLower (T.head uncheckedName) == Char.toUpper (T.head uncheckedName) then "EvT" <> uncheckedName else uncheckedName
     topics    = [Just (T.unpack $ eventId ev)] <> replicate (length indexedArgs) Nothing
     toBang ty = bangType (bang sourceNoUnpack sourceStrict) (return ty)
-    tag (n, ty) = AppT (AppT (ConT ''Tagged) (LitT $ NumTyLit n)) <$> typeQ ty
+    tag (n, ty) = AppT (AppT (ConT ''Tagged) (LitT $ NumTyLit n)) <$> typeEventQ ty
     labeledArgs = zip [1..] inputs
-    indexedArgs = map (\(n, ea) -> (n, eveArgType ea)) . filter (eveArgIndexed . snd) $ labeledArgs
+    indexedArgs = map (\(n, ea) -> (n, ea)) . filter (eveArgIndexed . snd) $ labeledArgs
     indexedName = mkName $ toUpperFirst (T.unpack name) <> "Indexed"
-    nonIndexedArgs = map (\(n, ea) -> (n, eveArgType ea)) . filter (not . eveArgIndexed . snd) $ labeledArgs
+    nonIndexedArgs = map (\(n, ea) -> (n, ea)) . filter (not . eveArgIndexed . snd) $ labeledArgs
     nonIndexedName = mkName $ toUpperFirst (T.unpack name) <> "NonIndexed"
-    allArgs = makeArgs name $ map (\i -> (eveArgName i, eveArgType i)) inputs
+    allArgs :: [(Name, EventArg)]
+    allArgs = makeArgs name $ map (\i -> (eveArgName i, i)) inputs
     allName = mkName $ toUpperFirst (T.unpack name)
     derivingD = [''Show, ''Eq, ''Ord, ''GHC.Generic]
 
@@ -232,11 +242,11 @@ mkDecl _ = return []
 -- | arg_name -> evArg_name
 -- | _argName -> evArgName
 -- | "" -> evi , for example Transfer(address, address uint256) ~> Transfer {transfer1 :: address, transfer2 :: address, transfer3 :: Integer}
-makeArgs :: Text -> [(Text, Text)] -> [(Name, Text)]
+makeArgs :: Text -> [(Text, EventArg)] -> [(Name, EventArg)]
 makeArgs prefix ns = go 1 ns
   where
     prefixStr = toLowerFirst . T.unpack $ prefix
-    go :: Int -> [(Text, Text)] -> [(Name, Text)]
+    go :: Int -> [(Text, EventArg)] -> [(Name, EventArg)]
     go _ [] = []
     go i ((h, ty) : tail') = if T.null h
                         then (mkName $ prefixStr ++ show i, ty) : go (i + 1) tail'

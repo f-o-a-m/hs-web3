@@ -65,37 +65,38 @@ library
                      , Network.Ethereum.Contract.Event
                      , Network.Ethereum.Contract.Event.MultiFilter
                      , Network.Ethereum.Contract.Event.SingleFilter
+                     , Network.Ethereum.Contract.Event.SimpleFilter
                      , Network.Ethereum.Contract.Event.Common
                      , Network.Ethereum.Contract.Method
                      , Network.JsonRpc.Exceptions
                      , Network.JsonRpc.TinyClient
                      , Data.String.Extra
-  build-depends:       base                 >4.9       && <4.12
-                     , template-haskell     >=2.12.0.0 && <2.14
-                     , data-default         >=0.7.1.1  && <0.8
-                     , generics-sop         >=0.3.2.0  && <0.4
-                     , transformers         >=0.5.2.0  && <0.6
-                     , http-client          >=0.5.12.1 && <0.6
-                     , exceptions           >=0.8.3    && <0.11
-                     , bytestring           >=0.10.8.2 && <0.11
+  build-depends:       base                 >4.9       && <5
+                     , template-haskell     
+                     , data-default         
+                     , generics-sop         
+                     , transformers         
+                     , http-client          
+                     , exceptions           
+                     , bytestring           
                      , cryptonite           ==0.25.*
-                     , basement             >=0.0.7    && <0.1
+                     , basement             
                      , lens
                      , lens-aeson
-                     , machines             >=0.6.3    && <0.7
-                     , tagged               >=0.8.5    && <0.9
-                     , parsec               >=3.1.13.0 && <3.2
-                     , memory               >=0.14.16  && <0.15
-                     , cereal               >=0.5.5.0  && <0.6
-                     , aeson                >=1.2.4.0  && <1.4
-                     , async                >=2.1.1.1  && <2.3
+                     , machines             
+                     , tagged               
+                     , parsec               
+                     , memory               
+                     , cereal               
+                     , aeson                
+                     , async                
                      , relapse              ==1.0.0.0
-                     , secp256k1            >=0.5.2    && <0.6
-                     , text                 >=1.2.3.0  && <1.3
-                     , mtl                  >=2.2.2    && <2.3
+                     , secp256k1-haskell            
+                     , text                 
+                     , mtl                  
                      , vinyl
-                     , random               >=1.1      && <1.2 
-                     , tuple                >=0.3
+                     , random               
+                     , tuple                
 
   if flag(tls)
     build-depends:     http-client-tls      >=0.3.5.3   && <0.4

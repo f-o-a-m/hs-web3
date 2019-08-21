@@ -13,7 +13,9 @@ module Network.Ethereum.Contract.Event.Common  where
 import           Control.Concurrent             (threadDelay)
 import           Control.Exception              (Exception, throwIO)
 import           Control.Monad.IO.Class         (liftIO)
-import           Data.Either                    (lefts, rights)
+import           Data.Either                    (fromLeft, isLeft, isRight,
+                                                 lefts, rights)
+import           Data.Tuple                     (uncurry)
 import           Network.Ethereum.ABI.Event     (DecodeEvent (..))
 import qualified Network.Ethereum.Web3.Eth      as Eth
 import           Network.Ethereum.Web3.Provider (Web3)
@@ -33,18 +35,26 @@ data FilterChange a =
                , filterChangeEvent     :: a
                }
 
-data EventParseFailure = EventParseFailure String deriving (Show)
+data EventParseFailure = EventParseFailure Change String deriving (Show)
 
 instance Exception EventParseFailure
 
 mkFilterChanges :: DecodeEvent i ni e
-                => [Change]
+                => (EventParseFailure -> IO ())
+                -> [Change]
                 -> IO [FilterChange e]
-mkFilterChanges changes =
-  let eChanges = map (\c@Change{..} -> FilterChange c <$> decodeEvent c) changes
-      ls = lefts eChanges
-      rs = rights eChanges
-  in if ls /= [] then throwIO (EventParseFailure $ (show ls)) else pure rs
+mkFilterChanges parseFailHandler changes = do
+  let eChanges = map (\c@Change{..} -> (c, FilterChange c <$> decodeEvent c)) changes
+      parseFails = map
+        ( uncurry EventParseFailure . (\(c,l) -> (c, fromLeft "Parse Error | should not be possible" l))
+        )
+        $ filter (isLeft . snd) eChanges
+      parseSuccesses = rights . map snd . filter (isRight . snd) $ eChanges
+  mapM_ parseFailHandler parseFails
+  pure parseSuccesses
+
+
+      -- in if ls /= [] then throwIO (EventParseFailure $ (show ls)) else pure rs
 
 
 data FilterStreamState e =
@@ -80,7 +90,7 @@ mkBlockNumber bm = case bm of
 For example:
  - at first call currentBlock = 11, chainHead = 10, lag  = 5
  - maxNextBlock = 10 - 5 = 5
- - 
+ -
 
 -}
 pollTillBlockProgress
